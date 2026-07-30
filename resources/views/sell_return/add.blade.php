@@ -121,10 +121,19 @@
                                             {{ $sell_line->variations->sub_sku }}
                                         </td>
                                         <td>
+                                            @php
+                                                $line_tax_percent = 0;
+                                                if (!empty($sell_line->line_tax) && !empty($sell_line->line_tax->amount)) {
+                                                    $line_tax_percent = (float) $sell_line->line_tax->amount;
+                                                } elseif (!empty($sell_line->unit_price) && (float) $sell_line->unit_price != 0) {
+                                                    $line_tax_percent = ((float) $sell_line->item_tax / (float) $sell_line->unit_price) * 100;
+                                                }
+                                            @endphp
                                             <input name="products[{{ $loop->index }}][unit_price]"
                                                 class="form-control input-sm input_number unit_price"
                                                 value="{{ $sell_line->unit_price }}"
-                                                data-orig-value="{{ $sell_line->unit_price }}">
+                                                data-orig-value="{{ $sell_line->unit_price }}"
+                                                data-tax-percent="{{ $line_tax_percent }}">
                                         </td>
                                         <td>
                                             <span class="display_currency line_tax_span "
@@ -326,12 +335,17 @@
                 var orig_unit_price = parseFloat(unit_price_input.data('orig-value'));
                 var item_tax;
                 var unit_price_inc_tax;
+                var line_tax_percent = parseFloat(unit_price_input.data('tax-percent'));
+                if (isNaN(line_tax_percent)) {
+                    line_tax_percent = tax_percent;
+                }
 
                 if (!isNaN(orig_unit_price) && unit_price === orig_unit_price) {
                     item_tax = parseFloat($(this).find('input.item_tax').data('orig-value')) || 0;
                     unit_price_inc_tax = parseFloat($(this).find('input.unit_price_inc_tax').data('orig-value')) || 0;
                 } else {
-                    unit_price_inc_tax = __add_percent(unit_price, tax_percent);
+                    // Use line-level tax rate (not invoice-level) when price is changed
+                    unit_price_inc_tax = __add_percent(unit_price, line_tax_percent);
                     item_tax = unit_price_inc_tax - unit_price;
                 }
 
