@@ -29,10 +29,22 @@ class MapPaymentTransaction
     {
         $payment = $event->transactionPayment;
 
+        // Payment delete after sale delete: transaction row may already be gone.
+        if (isset($event->isDeleted) && $event->isDeleted) {
+            $accountingUtil = new \Modules\Accounting\Utils\AccountingUtil();
+            $accountingUtil->deleteMap(null, $payment->id);
+
+            return;
+        }
+
         if (empty($payment->transaction_id)) {
             return;
         }
         $transaction = Transaction::find($payment->transaction_id);
+
+        if (empty($transaction)) {
+            return;
+        }
 
         if ($transaction->type == 'purchase') {
             $type = 'purchase_payment';
@@ -44,28 +56,24 @@ class MapPaymentTransaction
 
         //get location setting
         $business_location = BusinessLocation::find($transaction->location_id);
+        if (empty($business_location)) {
+            return;
+        }
         $accounting_default_map = json_decode($business_location->accounting_default_map, true);
 
         //check if default map is set or not, if set the proceed.
         $deposit_to = isset($accounting_default_map[$type]['deposit_to']) ? $accounting_default_map[$type]['deposit_to'] : null;
         $payment_account = isset($accounting_default_map[$type]['payment_account']) ? $accounting_default_map[$type]['payment_account'] : null;
 
-        //if payment is deleted then delete the mapping
-        if (isset($event->isDeleted) && $event->isDeleted) {
+        //Do the mapping
+        if (!is_null($deposit_to) && !is_null($payment_account)) {
+
+            $payment_id = $payment->id;
+            $user_id = request()->session()->get('user.id');
+            $business_id = $transaction->business_id;
+
             $accountingUtil = new \Modules\Accounting\Utils\AccountingUtil();
-            $accountingUtil->deleteMap(null, $payment->id);
-        } else {
-
-            //Do the mapping
-            if (!is_null($deposit_to) && !is_null($payment_account)) {
-
-                $payment_id = $payment->id;
-                $user_id = request()->session()->get('user.id');
-                $business_id = $transaction->business_id;
-
-                $accountingUtil = new \Modules\Accounting\Utils\AccountingUtil();
-                $accountingUtil->saveMap($type, $payment_id, $user_id, $business_id, $deposit_to, $payment_account);
-            }
+            $accountingUtil->saveMap($type, $payment_id, $user_id, $business_id, $deposit_to, $payment_account);
         }
     }
 }
