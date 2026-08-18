@@ -558,6 +558,7 @@ Route::middleware(['setData', 'auth', 'SetSessionData', 'language', 'timezone'])
 
 
 
+
 Route::get('fix9', function () {
 
     $transactions3 = Transaction::where('business_id', 93)
@@ -605,4 +606,232 @@ Route::get('fix9', function () {
     }
 
     dd("fixed from 2025-09-20 till today");
+});
+
+/**
+ * fix10: recalculate tobacco/VAT like working cashier
+ * - tobacco min_amount (e.g. 25) when price < limit, else %
+ * - line item_tax = tobacco + VAT
+ * - tobacco_tax stored separately
+ * - totals from ALL lines (not tobacco-only)
+ *
+ * GET /fix10
+ * Optional: ?dry_run=1
+ */
+Route::get('fix10', function () {
+    $dryRun = request()->boolean('dry_run');
+    $businessId = 93;
+    $fromDate = '2025-09-20';
+    $tobaccoProductTaxIds = [107, 108];
+
+    $taxCache = [];
+    $calcLineTaxes = function ($unitPrice, $taxId) use (&$taxCache) {
+        $unitPrice = (float) $unitPrice;
+        $result = [
+            'tax_id' => $taxId ?: null,
+            'item_tax' => 0.0,
+            'tobacco_tax' => 0.0,
+            'vat_tax' => 0.0,
+            'unit_price_inc_tax' => $unitPrice,
+        ];
+
+        if (empty($taxId)) {
+            return $result;
+        }
+
+        if (! isset($taxCache[$taxId])) {
+            $taxCache[$taxId] = \App\TaxRate::with('sub_taxes')->find($taxId);
+        }
+        $tax = $taxCache[$taxId];
+        if (empty($tax)) {
+            return $result;
+        }
+
+        $priceWithTax = $unitPrice;
+        $tobaccoTax = 0.0;
+        $vatTax = 0.0;
+
+        if ($tax->sub_taxes && $tax->sub_taxes->count() > 0) {
+            $firstSub = $tax->sub_taxes->firstWhere('min_amount', '!=', null);
+            $secondSub = $tax->sub_taxes->firstWhere('min_amount', null);
+
+            // Tobacco (or first sub with minimum)
+            if ($firstSub) {
+                $rate = (float) $firstSub->amount;
+                $minAmount = (float) $firstSub->min_amount;
+                if ($minAmount > 0 && $priceWithTax < $minAmount) {
+                    $tobaccoTax = $minAmount;
+                    $priceWithTax += $minAmount;
+                } else {
+                    $tobaccoTax = $priceWithTax * ($rate / 100);
+                    $priceWithTax += $tobaccoTax;
+                }
+            }
+
+            // VAT (second sub, usually no min)
+            if ($secondSub) {
+                $rate2 = (float) $secondSub->amount;
+                $minAmount2 = (float) ($secondSub->min_amount ?? 0);
+                if ($minAmount2 > 0 && $priceWithTax < $minAmount2) {
+                    $vatTax = $minAmount2;
+                    $priceWithTax += $minAmount2;
+                } else {
+                    $vatTax = $priceWithTax * ($rate2 / 100);
+                    $priceWithTax += $vatTax;
+                }
+            }
+        } else {
+            // Single tax (e.g. VAT 15% only)
+            $rate = (float) $tax->amount;
+            $minAmount = (float) ($tax->min_amount ?? 0);
+            if ($minAmount > 0 && $unitPrice < $minAmount) {
+                $vatTax = $minAmount;
+            } else {
+                $vatTax = $unitPrice * ($rate / 100);
+            }
+            $priceWithTax = $unitPrice + $vatTax;
+        }
+
+        $itemTax = $tobaccoTax + $vatTax;
+        $result['item_tax'] = round($itemTax, 4);
+        $result['tobacco_tax'] = round($tobaccoTax, 4);
+        $result['vat_tax'] = round($vatTax, 4);
+        $result['unit_price_inc_tax'] = round($unitPrice + $itemTax, 4);
+
+        return $result;
+    };
+
+    $transactions = \App\Transaction::where('business_id', $businessId)
+        ->where('type', 'sell')
+        ->whereDate('transaction_date', '>=', $fromDate)
+        ->orderBy('id')
+        ->get();
+
+    $stats = [
+        'transactions_scanned' => $transactions->count(),
+        'transactions_updated' => 0,
+        'lines_updated' => 0,
+        'skipped_no_product' => 0,
+        'dry_run' => $dryRun,
+        'samples' => [],
+    ];
+
+    foreach ($transactions as $transaction) {
+        $sellLines = \App\TransactionSellLine::with('product')
+            ->where('transaction_id', $transaction->id)
+            ->whereNull('parent_sell_line_id')
+            ->get();
+
+        if ($sellLines->isEmpty()) {
+            continue;
+        }
+
+        // Only touch invoices that have tobacco products (or were left with tax group 107/108 on lines)
+        $hasTobacco = $sellLines->contains(function ($line) use ($tobaccoProductTaxIds) {
+            $productTax = optional($line->product)->tax;
+            return in_array((int) $productTax, $tobaccoProductTaxIds, true)
+                || in_array((int) $line->tax_id, $tobaccoProductTaxIds, true);
+        });
+
+        if (! $hasTobacco) {
+            continue;
+        }
+
+        $totalBeforeTax = 0.0;
+        $totalVat = 0.0;
+        $totalIncTax = 0.0;
+        $lineUpdates = 0;
+        $sampleLines = [];
+
+        foreach ($sellLines as $sellLine) {
+            if (empty($sellLine->product)) {
+                $stats['skipped_no_product']++;
+                // Keep existing amounts in totals so invoice does not collapse
+                $totalBeforeTax += ((float) $sellLine->unit_price * (float) $sellLine->quantity);
+                $totalIncTax += ((float) $sellLine->unit_price_inc_tax * (float) $sellLine->quantity);
+                $vatPart = max(0, (float) $sellLine->item_tax - (float) ($sellLine->tobacco_tax ?? 0));
+                $totalVat += $vatPart * (float) $sellLine->quantity;
+                continue;
+            }
+
+            $unitPrice = (float) (
+                $sellLine->unit_price_before_discount !== null
+                    ? $sellLine->unit_price_before_discount
+                    : $sellLine->unit_price
+            );
+
+            // Prefer product tax definition (source of truth), fallback to line tax_id
+            $taxId = $sellLine->product->tax ?: $sellLine->tax_id;
+            $taxes = $calcLineTaxes($unitPrice, $taxId);
+
+            $qty = (float) $sellLine->quantity;
+            $totalBeforeTax += $unitPrice * $qty;
+            $totalVat += $taxes['vat_tax'] * $qty;
+            $totalIncTax += $taxes['unit_price_inc_tax'] * $qty;
+
+            $payload = [
+                'tax_id' => $taxes['tax_id'],
+                'unit_price' => round($unitPrice, 4),
+                'item_tax' => $taxes['item_tax'],
+                'tobacco_tax' => $taxes['tobacco_tax'],
+                'unit_price_inc_tax' => $taxes['unit_price_inc_tax'],
+            ];
+
+            if (! $dryRun) {
+                $sellLine->update($payload);
+            }
+            $lineUpdates++;
+
+            if (count($sampleLines) < 3 && $taxes['tobacco_tax'] > 0) {
+                $sampleLines[] = array_merge(['sell_line_id' => $sellLine->id, 'qty' => $qty], $payload);
+            }
+        }
+
+        // Invoice discount
+        $discount = 0.0;
+        if ($transaction->discount_type === 'percentage') {
+            $discount = ($totalBeforeTax * (float) $transaction->discount_amount) / 100;
+        } else {
+            $discount = (float) ($transaction->discount_amount ?? 0);
+        }
+
+        $shipping = (float) ($transaction->shipping_charges ?? 0);
+        $packing = (float) ($transaction->packing_charge ?? 0);
+        $roundOff = (float) ($transaction->round_off_amount ?? 0);
+        $additional = (float) ($transaction->additional_expense_value_1 ?? 0)
+            + (float) ($transaction->additional_expense_value_2 ?? 0)
+            + (float) ($transaction->additional_expense_value_3 ?? 0)
+            + (float) ($transaction->additional_expense_value_4 ?? 0);
+
+        // Match working cashier: line-level taxes, no order VAT override
+        $totalBeforeTaxNet = round($totalBeforeTax - $discount, 4);
+        $taxAmount = round($totalVat, 4); // VAT portion only (tobacco is in tobacco_tax / item_tax)
+        $finalTotal = round($totalIncTax - $discount + $shipping + $packing + $additional + $roundOff, 4);
+
+        $txPayload = [
+            'tax_id' => null,
+            'total_before_tax' => $totalBeforeTaxNet,
+            'tax_amount' => $taxAmount,
+            'final_total' => $finalTotal,
+        ];
+
+        if (! $dryRun) {
+            $transaction->update($txPayload);
+            app(\App\Utils\TransactionUtil::class)->updatePaymentStatus($transaction->id, $finalTotal);
+        }
+
+        $stats['transactions_updated']++;
+        $stats['lines_updated'] += $lineUpdates;
+
+        if (count($stats['samples']) < 5) {
+            $stats['samples'][] = [
+                'transaction_id' => $transaction->id,
+                'invoice_no' => $transaction->invoice_no,
+                'lines' => $sampleLines,
+                'totals' => $txPayload,
+            ];
+        }
+    }
+
+    dd($dryRun ? 'DRY RUN fix10' : 'fix10 done', $stats);
 });
