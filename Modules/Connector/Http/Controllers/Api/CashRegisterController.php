@@ -5,10 +5,16 @@ namespace Modules\Connector\Http\Controllers\Api;
 use App\CashRegister;
 use App\CashRegisterTransaction;
 use App\Transaction;
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Modules\Connector\Transformers\CommonResource;
+
+
 
 /**
  * @group Cash register management
@@ -351,10 +357,9 @@ public function update(Request $request, $id)
         } catch (\Exception $e) {
             DB::rollback();
 
-            \Log::emergency('File:' . $e->getFile() . 'Line:' . $e->getLine() . 'Message:' . $e->getMessage());
+            Log::emergency('File:' . $e->getFile() . 'Line:' . $e->getLine() . 'Message:' . $e->getMessage());
 
             return $this->otherExceptions($e);
         }
     }
 }
-
