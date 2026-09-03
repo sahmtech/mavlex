@@ -45,7 +45,7 @@
         }
 
         .invoice-logo {
-            width: 160px; 
+            width: 160px;
             height: auto;
             max-height: 160px;
             display: block;
@@ -61,12 +61,17 @@
 
         .text-blue {
             /* color: #22489B; */
-               color: #000 !important;
-         
+            color: #000 !important;
+
         }
 
-        .font-14 { font-size: 14px; }
-        .font-18 { font-size: 18px; }
+        .font-14 {
+            font-size: 14px;
+        }
+
+        .font-18 {
+            font-size: 18px;
+        }
 
         footer {
             position: fixed;
@@ -86,20 +91,20 @@
                     <strong class="font-18">{!! $receipt_details->display_name !!}</strong>
                     <div class="font-14" style="margin-top: 5px;">
                         {!! $receipt_details->address !!}
-                        
+
                         @if (!empty($location_details->mobile))
                             <br>@lang('lang_v1.contact_no'): <span class="ltr">{{ $location_details->mobile }}</span>
                         @endif
 
                         @if (!empty($location_details->website))
-                            <br>@lang('lang_v1.website'): 
+                            <br>@lang('lang_v1.website'):
                             <a href="{!! $location_details->website !!}" class="website-link" target="_blank">
                                 {!! $location_details->website !!}
                             </a>
                         @endif
 
-                        @if(!empty($receipt_details->custom__fields))
-                            @foreach($receipt_details->custom__fields as $label => $value)
+                        @if (!empty($receipt_details->custom__fields))
+                            @foreach ($receipt_details->custom__fields as $label => $value)
                                 <br><strong>{{ $label }}:</strong> {{ $value }}
                             @endforeach
                         @endif
@@ -115,7 +120,8 @@
 
             <td width="35%" class="center">
                 @if (!empty($zatca_qr_code))
-                    <img src="data:image/png;base64,{{ DNS2D::getBarcodePNG($zatca_qr_code, 'QRCODE', 2.0, 2.0, [0,0,0]) }}">
+                    <img
+                        src="data:image/png;base64,{{ DNS2D::getBarcodePNG($zatca_qr_code, 'QRCODE', 2.0, 2.0, [0, 0, 0]) }}">
                 @endif
             </td>
         </tr>
@@ -137,7 +143,9 @@
             <td>
                 @if (!empty($transaction->pay_term_number))
                     {{ $transaction->pay_term_number }} {{ $transaction->pay_term_type }}
-                @else N/A @endif
+                @else
+                    N/A
+                @endif
             </td>
         </tr>
     </table>
@@ -157,14 +165,14 @@
             </td>
             <td>
                 {!! ltrim($receipt_details->customer_info_address, '<br>') !!}
-                @if(!empty($receipt_details->customer_tax_number))
-                    <br>الرقم الضريبي للعميل: {{$receipt_details->customer_tax_number}}
+                @if (!empty($receipt_details->customer_tax_number))
+                    <br>الرقم الضريبي للعميل: {{ $receipt_details->customer_tax_number }}
                 @endif
             </td>
         </tr>
     </table>
 
-   <table class="table table-bordered">
+    <table class="table table-bordered">
         <tr class="gray-bg">
             <th>Seq</th>
             <th>Description / البيان</th>
@@ -183,27 +191,33 @@
             @php
                 $line_subtotal = ($line['unit_price_before_discount_uf'] ?? 0) * ($line['quantity_uf'] ?? 0);
                 $subtotal += $line_subtotal;
-                $discount = $transactionUtil->get_sell_line_discount_amount($line['line_discount_type_uf'], $line['line_discount_amount_uf'], $line['unit_price_before_discount_uf']) * ($line['quantity_uf'] ?? 0);
+                $discount =
+                    $transactionUtil->get_sell_line_discount_amount(
+                        $line['line_discount_type_uf'],
+                        $line['line_discount_amount_uf'],
+                        $line['unit_price_before_discount_uf'],
+                    ) *
+                    ($line['quantity_uf'] ?? 0);
                 $total_discount += round($discount, 2);
             @endphp
             <tr>
                 <td class="center">{{ $loop->iteration }}</td>
                 {{-- <td>
                     {!! $line['name'] !!} 
-                    @if(!empty($line['sub_sku'])) <br><small>({{ $line['sub_sku'] }})</small> @endif
+                    @if (!empty($line['sub_sku'])) <br><small>({{ $line['sub_sku'] }})</small> @endif
                 </td>
                 <td class="center">{{ $line['quantity'] }}</td> --}}
                 <td>
                     {!! $line['name'] !!}
                     <br>
                     {!! $line['sub_sku'] ?? '' !!}
-                   
-                     @if(!empty($line['product_description']))
-                            <br><small>{!!$line['product_description']!!}</small> <br>
-                        @endif
-                        @if(!empty($line['sell_line_note']))
-                            <br><small>{!!$line['sell_line_note']!!}</small> <br>
-                        @endif
+
+                    @if (!empty($line['product_description']))
+                        <br><small>{!! $line['product_description'] !!}</small> <br>
+                    @endif
+                    @if (!empty($line['sell_line_note']))
+                        <br><small>{!! $line['sell_line_note'] !!}</small> <br>
+                    @endif
                 </td>
                 <td>
                     {!! $line['quantity'] ?? '' !!} ({{ $line['units'] ?? '' }})
@@ -211,7 +225,7 @@
                 <td class="ltr">@format_currency($line['unit_price_before_discount_uf'])</td>
                 <td class="ltr">@format_currency($discount)</td>
                 <td class="center">{{ $line['tax_percent'] }}%</td>
-                <td class="ltr">{{ (str_replace(',', '', $line['tax'])) }}</td>
+                <td class="ltr">{{ str_replace(',', '', $line['tax']) }}</td>
                 <td class="ltr">@format_currency($line['line_total_uf'])</td>
             </tr>
         @endforeach
@@ -220,11 +234,8 @@
 
 
     @php
-        <!-- // 1. حساب المبلغ الصافي الخاضع للضريبة (Net Amount = Subtotal - Total Discount) -->
         $net_amount = $subtotal - $total_discount;
 
-        <!-- // 2. حساب إجمالي الضريبة الصحيح (Total Tax = Total Amount - Net Amount)
-        // أو استخدام المتغير الجاهز إن وجد في $receipt_details -->
         $total_tax = $receipt_details->total_unformatted - $net_amount;
     @endphp
 
@@ -240,7 +251,7 @@
             </tr>
             <tr>
                 <td class="gray-bg">Net Amount / المبلغ الصافي</td>
-                <td class="ltr">@format_currency($net_amount)</td> 
+                <td class="ltr">@format_currency($net_amount)</td>
             </tr>
             <tr>
                 <td class="gray-bg">Total Tax / إجمالي الضريبة</td>
@@ -269,7 +280,7 @@
             <tr>
                 {{-- تم التعديل هنا ليطابق حساباتك الصافية --}}
                 <td class="gray-bg">Net Amount / المبلغ الصافي</td>
-                <td class="ltr">@format_currency($subtotal)</td> 
+                <td class="ltr">@format_currency($subtotal)</td>
             </tr>
             <tr>
                 {{-- الضريبة = الإجمالي - الصافي --}}
@@ -287,10 +298,14 @@
         </table>
     </div> -->
 
-   <div style="width: 50%; float: right; font-size: 9pt;">
-        <p><strong>Invoiced Amount:</strong> {{ $transactionUtil->numberToCurrencyWords($receipt_details->total_unformatted, 'riyal', 'halala', 'en') }}</p>
-        <p><strong>مبلغ الفاتورة:</strong> {{ $transactionUtil->numberToCurrencyWords($receipt_details->total_unformatted, 'ريالًا و', ' هللة فقط', 'ar') }}</p>
-        
+    <div style="width: 50%; float: right; font-size: 9pt;">
+        <p><strong>Invoiced Amount:</strong>
+            {{ $transactionUtil->numberToCurrencyWords($receipt_details->total_unformatted, 'riyal', 'halala', 'en') }}
+        </p>
+        <p><strong>مبلغ الفاتورة:</strong>
+            {{ $transactionUtil->numberToCurrencyWords($receipt_details->total_unformatted, 'ريالًا و', ' هللة فقط', 'ar') }}
+        </p>
+
         <div style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px;">
             {!! $receipt_details->footer_text !!}
         </div>
@@ -301,4 +316,5 @@
         Page {PAGENO} of {nbpg}
     </footer>
 </body>
+
 </html>
