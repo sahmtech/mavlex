@@ -217,7 +217,46 @@
         @endforeach
     </table>
 
+
+
+    @php
+        <!-- // 1. حساب المبلغ الصافي الخاضع للضريبة (Net Amount = Subtotal - Total Discount) -->
+        $net_amount = $subtotal - $total_discount;
+
+        <!-- // 2. حساب إجمالي الضريبة الصحيح (Total Tax = Total Amount - Net Amount)
+        // أو استخدام المتغير الجاهز إن وجد في $receipt_details -->
+        $total_tax = $receipt_details->total_unformatted - $net_amount;
+    @endphp
+
     <div style="width: 45%; float: left;">
+        <table class="table table-bordered">
+            <tr>
+                <td class="gray-bg">Subtotal / المجموع الفرعي</td>
+                <td class="ltr">@format_currency($subtotal)</td>
+            </tr>
+            <tr>
+                <td class="gray-bg">Total Discount / إجمالي الخصم</td>
+                <td class="ltr">@format_currency($total_discount)</td>
+            </tr>
+            <tr>
+                <td class="gray-bg">Net Amount / المبلغ الصافي</td>
+                <td class="ltr">@format_currency($net_amount)</td> 
+            </tr>
+            <tr>
+                <td class="gray-bg">Total Tax / إجمالي الضريبة</td>
+                <td class="ltr">@format_currency($total_tax)</td>
+            </tr>
+            <tr style="font-weight: bold; font-size: 11pt;">
+                <td class="gray-bg">Total Amount / المجموع الكلي</td>
+                <td class="ltr">@format_currency($receipt_details->total_unformatted)</td>
+            </tr>
+            <tr>
+                <td class="gray-bg">Due Amount / المبلغ المستحق</td>
+                <td class="ltr">{!! $receipt_details->total_due !!}</td>
+            </tr>
+        </table>
+    </div>
+    <!-- <div style="width: 45%; float: left;">
         <table class="table table-bordered">
             <tr>
                 <td class="gray-bg">Subtotal / المجموع الفرعي</td>
@@ -246,7 +285,7 @@
                 <td class="ltr">{!! $receipt_details->total_due !!}</td>
             </tr>
         </table>
-    </div>
+    </div> -->
 
    <div style="width: 50%; float: right; font-size: 9pt;">
         <p><strong>Invoiced Amount:</strong> {{ $transactionUtil->numberToCurrencyWords($receipt_details->total_unformatted, 'riyal', 'halala', 'en') }}</p>
