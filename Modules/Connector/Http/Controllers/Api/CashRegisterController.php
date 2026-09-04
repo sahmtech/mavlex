@@ -5,6 +5,7 @@ namespace Modules\Connector\Http\Controllers\Api;
 use App\CashRegister;
 use App\CashRegisterTransaction;
 use App\Transaction;
+use App\Utils\CashRegisterUtil;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
@@ -24,6 +25,20 @@ use Modules\Connector\Transformers\CommonResource;
  */
 class CashRegisterController extends ApiController
 {
+
+
+    protected $cashRegisterUtil;
+
+    /**
+     * Constructor
+     *
+     * @param CashRegisterUtil $cashRegisterUtil
+     * @return void
+     */
+    public function __construct(CashRegisterUtil $cashRegisterUtil)
+    {
+        $this->cashRegisterUtil = $cashRegisterUtil;
+    }
     /**
      * List Cash Registers
      *
