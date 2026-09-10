@@ -52,9 +52,20 @@ class DataController extends Controller
                 }
                 if ($this->commonUtil->isModuleEnabled('tables')) {
                     $tables_enabled = true;
-                    $tables = ResTable::where('business_id', $business_id)
-                            ->where('location_id', $location_id)
-                            ->pluck('name', 'id');
+                    $tables = ResTable::where('res_tables.business_id', $business_id)
+                            ->where('res_tables.location_id', $location_id)
+                            ->leftJoin('res_floors AS RF', 'res_tables.floor_id', '=', 'RF.id')
+                            ->orderBy('RF.name')
+                            ->orderBy('res_tables.name')
+                            ->get(['res_tables.id', 'res_tables.name', 'RF.name as floor_name'])
+                            ->mapWithKeys(function ($row) {
+                                $label = $row->name;
+                                if (! empty($row->floor_name)) {
+                                    $label = $row->floor_name.' — '.$row->name;
+                                }
+
+                                return [$row->id => $label];
+                            });
                 }
             } else {
                 $tables = [];

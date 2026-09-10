@@ -5043,6 +5043,7 @@ class TransactionUtil extends Util
             ->whereIn('type', ['sell', 'sales_order'])
             ->with(['sell_lines', 'payment_lines'])
             ->first();
+        $table_id_to_release = ! empty($transaction) ? $transaction->res_table_id : null;
 
         // If ZATCA module is installed and this transaction is successfully synced, prevent deletion
         $moduleUtil = new ModuleUtil();
@@ -5118,6 +5119,14 @@ class TransactionUtil extends Util
             'success' => true,
             'msg' => __('lang_v1.sale_delete_success'),
         ];
+
+        if (! empty($table_id_to_release)) {
+            try {
+                app(\App\Services\TableOrderService::class)->releaseIfNoOpenOrder($business_id, $table_id_to_release, 'order:updated');
+            } catch (\Throwable $e) {
+                \Log::debug('Table release after sale delete skipped: '.$e->getMessage());
+            }
+        }
 
         return $output;
     }
@@ -5332,6 +5341,8 @@ class TransactionUtil extends Util
                 DB::raw('COUNT( DISTINCT tsl.id) as total_items'),
                 DB::raw("CONCAT(COALESCE(ss.surname, ''),' ',COALESCE(ss.first_name, ''),' ',COALESCE(ss.last_name,'')) as waiter"),
                 'tables.name as table_name',
+                'transactions.source',
+                'transactions.res_table_id',
                 DB::raw('SUM(tsl.quantity - tsl.so_quantity_invoiced) as so_qty_remaining'),
                 'transactions.is_export',
                 DB::raw("CONCAT(COALESCE(dp.surname, ''),' ',COALESCE(dp.first_name, ''),' ',COALESCE(dp.last_name,'')) as delivery_person")

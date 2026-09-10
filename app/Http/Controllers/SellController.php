@@ -325,7 +325,7 @@ class SellController extends Controller
 
                 $sales = $sells->where('transactions.is_suspend', 1)
                             ->with($with)
-                            ->addSelect('transactions.is_suspend', 'transactions.res_table_id', 'transactions.res_waiter_id', 'transactions.additional_notes')
+                            ->addSelect('transactions.is_suspend', 'transactions.res_table_id', 'transactions.res_waiter_id', 'transactions.additional_notes', 'transactions.source')
                             ->get();
 
                 return view('sale_pos.partials.suspended_sales_modal')->with(compact('sales', 'is_tables_enabled', 'is_service_staff_enabled', 'transaction_sub_type'));
@@ -593,6 +593,10 @@ class SellController extends Controller
                         $invoice_no .= ' &nbsp;<small class="label bg-yellow label-round no-print" title="'.__('crm::lang.order_request').'"><i class="fas fa-tasks"></i></small>';
                     }
 
+                    if (! empty($row->res_table_id) && $row->source === 'local') {
+                        $invoice_no .= ' &nbsp;<small class="label bg-purple label-round no-print" title="'.__('restaurant.internal_table_order').'"><i class="fa fa-cutlery"></i> '.__('restaurant.internal_table_order').'</small>';
+                    }
+
                     return $invoice_no;
                 })
                 ->editColumn('shipping_status', function ($row) use ($shipping_statuses) {
@@ -698,6 +702,9 @@ class SellController extends Controller
         $shipping_statuses = $this->transactionUtil->shipping_statuses();
 
         $sources = $this->transactionUtil->getSources($business_id);
+        if (isset($sources['local'])) {
+            $sources['local'] = __('restaurant.internal_table_order');
+        }
         if ($is_woocommerce) {
             $sources['woocommerce'] = 'Woocommerce';
         }

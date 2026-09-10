@@ -25,6 +25,13 @@ Route::middleware('auth:api', 'timezone')->prefix('connector/api')->group(functi
 
     Route::resource('table', Modules\Connector\Http\Controllers\Api\TableController::class)->only('index', 'show');
 
+    Route::get('get-tables', [Modules\Connector\Http\Controllers\Api\WaiterTableController::class, 'getTables']);
+    Route::get('tables/{id}', [Modules\Connector\Http\Controllers\Api\WaiterTableController::class, 'show']);
+    Route::post('change-status/{id}', [Modules\Connector\Http\Controllers\Api\WaiterTableController::class, 'changeStatus']);
+    Route::post('new-order', [Modules\Connector\Http\Controllers\Api\WaiterTableController::class, 'newOrder']);
+    Route::post('update-orders/{id}', [Modules\Connector\Http\Controllers\Api\WaiterTableController::class, 'updateOrder']);
+    Route::post('cancel-order', [Modules\Connector\Http\Controllers\Api\WaiterTableController::class, 'cancelOrder']);
+
     Route::get('user/loggedin', [Modules\Connector\Http\Controllers\Api\UserController::class, 'loggedin']);
     Route::post('user-registration', [Modules\Connector\Http\Controllers\Api\UserController::class, 'registerUser']);
     Route::resource('user', Modules\Connector\Http\Controllers\Api\UserController::class)->only('index', 'show');

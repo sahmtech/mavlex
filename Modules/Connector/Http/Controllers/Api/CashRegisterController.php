@@ -30,14 +30,14 @@ class CashRegisterController extends ApiController
     protected $cashRegisterUtil;
 
     /**
-     * Constructor
-     *
-     * @param CashRegisterUtil $cashRegisterUtil
-     * @return void
+     * Parent ApiController also defines __construct().
+     * Always call parent and resolve the util from the container so
+     * $this->cashRegisterUtil is never uninitialized.
      */
     public function __construct(CashRegisterUtil $cashRegisterUtil)
     {
-        $this->cashRegisterUtil = $cashRegisterUtil;
+        parent::__construct();
+        $this->cashRegisterUtil = $cashRegisterUtil ?: app(CashRegisterUtil::class);
     }
     /**
      * List Cash Registers
@@ -315,56 +315,67 @@ class CashRegisterController extends ApiController
         return CommonResource::collection($cash_registers);
     }
 	
-public function update(Request $request, $id)
+    public function update(Request $request, $id)
     {
         try {
             $user = Auth::user();
             $business_id = $user->business_id;
             DB::beginTransaction();
 
+            if (! $this->cashRegisterUtil) {
+                $this->cashRegisterUtil = app(CashRegisterUtil::class);
+            }
 
             $input = $request->only(['closing_amount', 'total_card_slips', 'total_cheques', 'closing_note']);
-            $input['closing_amount'] = $this->cashRegisterUtil->num_uf($input['closing_amount']);
+            $input['closing_amount'] = $this->cashRegisterUtil->num_uf($input['closing_amount'] ?? 0);
             $user_id = $user->id;
             $input['closed_at'] = Carbon::now()->format('Y-m-d H:i:s');
             $input['status'] = 'close';
-            $input['denominations'] = !empty(request()->input('denominations')) ? json_encode(request()->input('denominations')) : null;
+            $input['denominations'] = ! empty($request->input('denominations'))
+                ? json_encode($request->input('denominations'))
+                : null;
 
-            CashRegister::find($id)->where('user_id', $user_id)
+            $register = CashRegister::where('id', $id)
+                ->where('business_id', $business_id)
+                ->where('user_id', $user_id)
                 ->where('status', 'open')
-                ->update($input);
-            $register =  CashRegister::find($id);
-            /*  */
+                ->firstOrFail();
+
+            $register->update($input);
+
+            $cash_register_payments = [];
             $transaction_ids_string = $request->input('transaction_ids');
-            $transaction_ids = explode(',', $transaction_ids_string);
-    
-            $sells = Transaction::where('business_id', $business_id)
-                ->whereIn('id', $transaction_ids)
-                ->where('status', 'final')
-                ->where('type', 'sell')
-                ->where('created_by', $user->id)
-                ->with(['payment_lines'])
-                ->get();
-    
-            foreach ($sells as $sell) {
-                foreach ($sell->payment_lines as $payment) {
-                    $cash_register_payments[] = new CashRegisterTransaction([
-                        'amount' => $payment->amount,
-                        'pay_method' => $payment->method,
-                        'type' => 'credit',
-                        'transaction_type' => 'sell',
-                        'transaction_id' => $sell->id,
-                    ]);
+            $transaction_ids = array_filter(explode(',', (string) $transaction_ids_string));
+
+            if (! empty($transaction_ids)) {
+                $sells = Transaction::where('business_id', $business_id)
+                    ->whereIn('id', $transaction_ids)
+                    ->where('status', 'final')
+                    ->where('type', 'sell')
+                    ->where('created_by', $user->id)
+                    ->with(['payment_lines'])
+                    ->get();
+
+                foreach ($sells as $sell) {
+                    foreach ($sell->payment_lines as $payment) {
+                        $cash_register_payments[] = new CashRegisterTransaction([
+                            'amount' => $payment->amount,
+                            'pay_method' => $payment->method,
+                            'type' => 'credit',
+                            'transaction_type' => 'sell',
+                            'transaction_id' => $sell->id,
+                        ]);
+                    }
                 }
             }
-    
-            if (!empty($cash_register_payments)) {
+
+            if (! empty($cash_register_payments)) {
                 $register->cash_register_transactions()->saveMany($cash_register_payments);
             }
-            /*  */
+
             DB::commit();
 
-            return new CommonResource($register);
+            return new CommonResource($register->fresh(['cash_register_transactions']));
         } catch (ModelNotFoundException $e) {
             DB::rollback();
 
@@ -372,7 +383,7 @@ public function update(Request $request, $id)
         } catch (\Exception $e) {
             DB::rollback();
 
-            Log::emergency('File:' . $e->getFile() . 'Line:' . $e->getLine() . 'Message:' . $e->getMessage());
+            Log::emergency('File:'.$e->getFile().' Line:'.$e->getLine().' Message:'.$e->getMessage());
 
             return $this->otherExceptions($e);
         }

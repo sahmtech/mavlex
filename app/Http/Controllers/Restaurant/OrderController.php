@@ -2,8 +2,9 @@
 
 namespace App\Http\Controllers\Restaurant;
 
+use App\Services\TableOrderService;
+use App\Transaction;
 use App\TransactionSellLine;
-use App\User;
 use App\Utils\RestaurantUtil;
 use App\Utils\Util;
 use Illuminate\Http\Request;
@@ -90,6 +91,15 @@ class OrderController extends Controller
             }
 
             $query->update(['res_line_order_status' => 'served']);
+
+            $order = Transaction::where('business_id', $business_id)->find($id);
+            if ($order) {
+                $order->res_order_status = 'served';
+                $order->save();
+                if (! empty($order->res_table_id)) {
+                    app(TableOrderService::class)->releaseIfNoOpenOrder($business_id, $order->res_table_id, 'order:updated');
+                }
+            }
 
             $output = ['success' => 1,
                 'msg' => trans('restaurant.order_successfully_marked_served'),

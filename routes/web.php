@@ -461,6 +461,17 @@ Route::middleware(['setData', 'auth', 'SetSessionData', 'language', 'timezone', 
 
     //Restaurant module
     Route::prefix('modules')->group(function () {
+        Route::get('floors/for-location/{location_id}', [Restaurant\FloorController::class, 'forLocation']);
+        Route::resource('floors', Restaurant\FloorController::class)->except(['show']);
+        Route::get('table-orders/floor-state', [Restaurant\TableOrderController::class, 'floorState']);
+        Route::get('table-orders/products', [Restaurant\TableOrderController::class, 'products']);
+        Route::post('table-orders/new-order', [Restaurant\TableOrderController::class, 'newOrder']);
+        Route::post('table-orders/change-status/{id}', [Restaurant\TableOrderController::class, 'changeStatus']);
+        Route::post('table-orders/serve/{id}', [Restaurant\TableOrderController::class, 'serve']);
+        Route::post('table-orders/cancel-order', [Restaurant\TableOrderController::class, 'cancel']);
+        Route::get('table-orders/{id}', [Restaurant\TableOrderController::class, 'show']);
+        Route::get('tables/{id}/qr', [Restaurant\TableController::class, 'qr']);
+        Route::get('tables/{id}/qr-download', [Restaurant\TableController::class, 'qrDownload']);
         Route::resource('tables', Restaurant\TableController::class);
         Route::resource('modifiers', Restaurant\ModifierSetsController::class);
 

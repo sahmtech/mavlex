@@ -21,4 +21,19 @@ class ResTable extends Model
      * @var array
      */
     protected $guarded = ['id'];
+
+    public function floor()
+    {
+        return $this->belongsTo(ResFloor::class, 'floor_id');
+    }
+
+    public function assignedWaiter()
+    {
+        return $this->belongsTo(\App\User::class, 'assigned_waiter_id');
+    }
+
+    public function location()
+    {
+        return $this->belongsTo(\App\BusinessLocation::class, 'location_id');
+    }
 }

@@ -33,6 +33,9 @@
 					              @if($is_tables_enabled && !empty($sale->table->name))
 					              	@lang('restaurant.table'): {{$sale->table->name}}
 					              @endif
+					              @if($sale->source === 'local' && !empty($sale->res_table_id))
+					              	<br><span class="label bg-purple">@lang('restaurant.internal_table_order')</span>
+					              @endif
 					              @if($is_service_staff_enabled && !empty($sale->service_staff))
 					              	<br>@lang('restaurant.service_staff'): {{$sale->service_staff->user_full_name}}
 					              @endif
