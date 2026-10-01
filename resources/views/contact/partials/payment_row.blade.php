@@ -47,7 +47,7 @@
             <a data-href="{{action([\App\Http\Controllers\SellController::class, 'show'], [$transaction_id])}}" href="#" data-container=".view_modal" class="btn-modal">{{$invoice_no}}</a> <br> <small>({{__('sale.sale')}}) </small>
 
         @elseif($transaction_type == 'sell_return')
-            <a data-href="{{action([\App\Http\Controllers\SellReturnController::class, 'show'], [$return_parent_id])}}" href="#" data-container=".view_modal" class="btn-modal">{{$invoice_no }}</a> <br> <small>({{__('lang_v1.sell_return')}}) </small>
+            <a data-href="{{action([\App\Http\Controllers\SellReturnController::class, 'show'], [$transaction_id])}}" href="#" data-container=".view_modal" class="btn-modal">{{$invoice_no }}</a> <br> <small>({{__('lang_v1.sell_return')}}) </small>
         @elseif($transaction_type == 'purchase_return')
             <a data-href="{{action([\App\Http\Controllers\PurchaseReturnController::class, 'show'], [$return_parent_id])}}" href="#" data-container=".view_modal" class="btn-modal">{{$ref_no}}</a> <br> <small>({{__('lang_v1.purchase_return')}}) </small>
         @elseif ($transaction_type == 'purchase')

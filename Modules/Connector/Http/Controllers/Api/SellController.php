@@ -1890,7 +1890,7 @@ class SellController extends ApiController
 
                 DB::beginTransaction();
 
-                $output = $this->transactionUtil->addSellReturn($input, $business_id, $user->id);
+                $output = $this->transactionUtil->addSellReturn($input, $business_id, $user->id, false);
 
                 DB::commit();
             }

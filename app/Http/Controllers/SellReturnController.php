@@ -197,7 +197,7 @@ class SellReturnController extends Controller
                     if (!empty($row->parent_sale_id)) {
                         $returnString .= '<li>
                 <a href="#" class="btn-modal" data-container=".view_modal" 
-                    data-href="' . action('App\Http\Controllers\SellReturnController@show', [$row->parent_sale_id]) . '">
+                    data-href="' . action('App\Http\Controllers\SellReturnController@show', [$row->id]) . '">
                     <i class="fas fa-eye" aria-hidden="true"></i> ' . __('messages.view') . '
                 </a>
             </li>
@@ -275,8 +275,8 @@ class SellReturnController extends Controller
                 })
                 ->setRowAttr([
                     'data-href' => function ($row) {
-                        if (auth()->user()->can('sell.view') && !empty($row->parent_sale_id)) {
-                            return action([\App\Http\Controllers\SellReturnController::class, 'show'], [$row->parent_sale_id]);
+                        if (auth()->user()->can('sell.view') && !empty($row->id)) {
+                            return action([\App\Http\Controllers\SellReturnController::class, 'show'], [$row->id]);
                         }
                         return '';
                     }
@@ -469,58 +469,100 @@ class SellReturnController extends Controller
             ->with(
                 'contact',
                 'return_parent',
+                'return_parent_sell',
                 'tax',
                 'sell_lines',
                 'sell_lines.product',
                 'sell_lines.variations',
+                'sell_lines.variations.product_variation',
                 'sell_lines.sub_unit',
-                'sell_lines.product',
                 'sell_lines.product.unit',
                 'location'
             );
 
         if (!auth()->user()->can('access_sell_return') && auth()->user()->can('access_own_sell_return')) {
-            $sells->where('created_by', request()->session()->get('user.id'));
+            $query->where('created_by', request()->session()->get('user.id'));
         }
-        $sell = $query->first();
+        $txn = $query->first();
+        if (empty($txn)) {
+            abort(404);
+        }
 
-        foreach ($sell->sell_lines as $key => $value) {
+        if ($txn->type === 'sell_return') {
+            $sell_return = $txn;
+            $sell = $txn->return_parent_sell;
+            if (empty($sell)) {
+                abort(404);
+            }
+            $sell->loadMissing(['contact', 'location']);
+        } else {
+            $sell = $txn;
+            $sell_return = $txn->return_parent;
+            if (!empty($sell_return)) {
+                $sell_return->loadMissing([
+                    'tax',
+                    'sell_lines',
+                    'sell_lines.product',
+                    'sell_lines.variations',
+                    'sell_lines.variations.product_variation',
+                    'sell_lines.sub_unit',
+                    'sell_lines.product.unit',
+                ]);
+            }
+        }
+
+        $return_lines = !empty($sell_return) ? $sell_return->sell_lines : collect();
+
+        foreach ($return_lines as $key => $value) {
             if (!empty($value->sub_unit_id)) {
-                $formated_sell_line = $this->transactionUtil->recalculateSellLineTotals($business_id, $value);
-                $sell->sell_lines[$key] = $formated_sell_line;
+                $return_lines[$key] = $this->transactionUtil->recalculateSellLineTotals($business_id, $value);
             }
         }
 
         $sell_taxes = [];
-        if (!empty($sell->return_parent->tax)) {
-            if ($sell->return_parent->tax->is_tax_group) {
-                $sell_taxes = $this->transactionUtil->sumGroupTaxDetails($this->transactionUtil->groupTaxDetails($sell->return_parent->tax, $sell->return_parent->tax_amount));
+        if (!empty($sell_return) && !empty($sell_return->tax)) {
+            if ($sell_return->tax->is_tax_group) {
+                $sell_taxes = $this->transactionUtil->sumGroupTaxDetails($this->transactionUtil->groupTaxDetails($sell_return->tax, $sell_return->tax_amount));
             } else {
-                $sell_taxes[$sell->return_parent->tax->name] = $sell->return_parent->tax_amount;
+                $sell_taxes[$sell_return->tax->name] = $sell_return->tax_amount;
+            }
+        }
+        if (empty($sell_taxes) && !empty($sell_return)) {
+            $line_tax_total = 0;
+            foreach ($return_lines as $return_line) {
+                $line_tax_total += ((float) $return_line->item_tax) * ((float) $return_line->quantity);
+            }
+            if ($line_tax_total > 0) {
+                $sell_taxes[__('sale.tax')] = $line_tax_total;
             }
         }
 
         $total_discount = 0;
-        if ($sell->return_parent->discount_type == 'fixed') {
-            $total_discount = $sell->return_parent->discount_amount;
-        } elseif ($sell->return_parent->discount_type == 'percentage') {
-            $discount_percent = $sell->return_parent->discount_amount;
-            if ($discount_percent == 100) {
-                $total_discount = $sell->return_parent->total_before_tax;
-            } else {
-                $total_after_discount = $sell->return_parent->final_total - $sell->return_parent->tax_amount;
-                $total_before_discount = $total_after_discount * 100 / (100 - $discount_percent);
-                $total_discount = $total_before_discount - $total_after_discount;
+        if (!empty($sell_return)) {
+            if ($sell_return->discount_type == 'fixed') {
+                $total_discount = $sell_return->discount_amount;
+            } elseif ($sell_return->discount_type == 'percentage') {
+                $discount_percent = $sell_return->discount_amount;
+                if ($discount_percent == 100) {
+                    $total_discount = $sell_return->total_before_tax;
+                } else {
+                    $total_after_discount = $sell_return->final_total - $sell_return->tax_amount;
+                    $total_before_discount = $total_after_discount * 100 / (100 - $discount_percent);
+                    $total_discount = $total_before_discount - $total_after_discount;
+                }
             }
         }
 
-        $activities = Activity::forSubject($sell->return_parent)
-            ->with(['causer', 'subject'])
-            ->latest()
-            ->get();
+        $activities = [];
+        if (!empty($sell_return)) {
+            $activities = Activity::forSubject($sell_return)
+                ->with(['causer', 'subject'])
+                ->latest()
+                ->get();
+        }
 
         return view('sell_return.show')
-            ->with(compact('sell', 'sell_taxes', 'total_discount', 'activities'));
+            ->with(compact('sell', 'sell_return', 'return_lines', 'sell_taxes', 'total_discount', 'activities'));
     }
 
     /**

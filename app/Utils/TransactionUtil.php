@@ -6374,6 +6374,43 @@ class TransactionUtil extends Util
         return [$invoice_total, -1 * $diff];
     }
 
+    /**
+     * Credit-note totals from posted sell-return lines (Connector/API).
+     * Uses unit_price_inc_tax and item_tax as sent — no tax-group recalculation.
+     */
+    protected function sellReturnTotalsFromPostedLines(array $products, array $discount)
+    {
+        $output = ['total_before_tax' => 0, 'tax' => 0, 'discount' => 0, 'final_total' => 0];
+
+        foreach ($products as $product) {
+            $qty = (float) ($product['quantity'] ?? 0);
+            $unit_price = (float) ($product['unit_price'] ?? 0);
+            $inc = (float) ($product['unit_price_inc_tax'] ?? 0);
+            $item_tax = (float) ($product['item_tax'] ?? 0);
+            if ($item_tax == 0.0 && $inc > $unit_price) {
+                $item_tax = $inc - $unit_price;
+            }
+            $line_discount = (float) ($product['line_discount_amount'] ?? 0);
+
+            $output['total_before_tax'] += $qty * $unit_price;
+            $output['tax'] += $qty * $item_tax;
+            $output['discount'] += $qty * $line_discount;
+            $output['final_total'] += $qty * $inc;
+        }
+
+        $invoice_discount = (float) ($discount['discount_amount'] ?? 0);
+        if (($discount['discount_type'] ?? 'fixed') === 'percentage') {
+            $disc_value = $output['final_total'] * $invoice_discount / 100;
+            $output['discount'] += $disc_value;
+            $output['final_total'] -= $disc_value;
+        } else {
+            $output['discount'] += $invoice_discount;
+            $output['final_total'] -= $invoice_discount;
+        }
+
+        return $output;
+    }
+
     public function addSellReturn($input, $business_id, $user_id, $uf_number = true, $update_sell_lines = false)
     {
         $discount = [
@@ -6387,11 +6424,17 @@ class TransactionUtil extends Util
 
         $input['tax_id'] = $input['tax_id'] ?? null;
 
-        $invoice_total = $productUtil->calculateInvoiceTotal($input['products'], $input['tax_id'], $discount, $uf_number);
+        // API (uf_number=false): trust posted line amounts. Do not recalculate
+        // compound/group tax via calculateInvoiceTotal — that path is POS-only.
+        if ($uf_number) {
+            $invoice_total = $productUtil->calculateInvoiceTotal($input['products'], $input['tax_id'], $discount, $uf_number);
+        } else {
+            $invoice_total = $this->sellReturnTotalsFromPostedLines($input['products'], $discount);
+        }
 
         //Get parent sale
         $sell = Transaction::where('business_id', $business_id)
-            ->with(['sell_lines', 'sell_lines.sub_unit'])
+            ->with(['sell_lines', 'sell_lines.sub_unit', 'sell_lines.product'])
             ->findOrFail($input['transaction_id']);
 
         $already_returned_amount = Transaction::where('business_id', $business_id)
@@ -6410,7 +6453,7 @@ class TransactionUtil extends Util
             'discount_type' => $discount['discount_type'],
             'discount_amount' => $uf_number ? $this->num_uf($discount['discount_amount']) : $discount['discount_amount'],
             'tax_id' => $input['tax_id'],
-            'tax_amount' => 0,
+            'tax_amount' => $uf_number ? 0 : ($invoice_total['tax'] ?? 0),
             'total_before_tax' => $invoice_total['total_before_tax'],
             'final_total' => $invoice_total['final_total'],
             'round_off_amount' => $round_off_amount,
@@ -6463,49 +6506,63 @@ class TransactionUtil extends Util
         $sell_return_lines_data = [];
 
         foreach ($product_lines as $product_line) {
-
-            $sell_line = $sell->sell_lines->firstWhere('id', $product_line['sell_line_id']);
+            $sell_line_id = isset($product_line['sell_line_id']) ? (int) $product_line['sell_line_id'] : 0;
+            $sell_line = $sell->sell_lines->firstWhere('id', $sell_line_id);
             $quantity_returned = $uf_number ? $this->num_uf($product_line['quantity']) : $product_line['quantity'];
 
-            if ($sell_line) {
-
-                $sell_return_lines_data[] = [
-                    'transaction_id' => $sell_return->id, // new transaction "sell_return" type.
-                    'product_id' => $sell_line->product_id,
-                    'variation_id' => $sell_line->variation_id,
-                    'quantity' => $quantity_returned,
-                    'unit_price' => $uf_number ? $this->num_uf($product_line['unit_price']) : $product_line['unit_price'],
-                    'item_tax' => $uf_number ? $this->num_uf($product_line['item_tax']) : $product_line['item_tax'],
-                    'unit_price_inc_tax' => $uf_number ? $this->num_uf($product_line['unit_price_inc_tax']) : $product_line['unit_price_inc_tax'],
-                    'tax_id' => $product_line['tax_id'],
-                    'unit_price_before_discount' => $uf_number ? $this->num_uf($product_line['unit_price']) : $product_line['unit_price'],
-                    'parent_sell_line_id' => $sell_line->id, // the parent sell line id 
-                    'created_at' => \Carbon::now(),
-                    'updated_at' => \Carbon::now(),
-                ];
-
-                $is_physical_product = $sell_line->product->enable_stock;
-                if ($is_physical_product) {
-                    $this->updateQuantitySoldFromSellLine($sell_line, 0, $quantity_returned, false);
-
-                    $productUtil->updateProductQuantity(
-                        $sell_return->location_id,
-                        $sell_line->product_id,
-                        $sell_line->variation_id,
-                        $quantity_returned,
-                        0,
-                        null,
-                        false
-                    );
+            if (! $sell_line) {
+                if (! $uf_number) {
+                    throw new \InvalidArgumentException('sell_line_id '.$sell_line_id.' does not belong to sale '.$sell->id);
                 }
+                continue;
+            }
+
+            $unit_price = $uf_number ? $this->num_uf($product_line['unit_price'] ?? $sell_line->unit_price) : ($product_line['unit_price'] ?? $sell_line->unit_price);
+            $unit_price_inc_tax = $uf_number ? $this->num_uf($product_line['unit_price_inc_tax'] ?? $sell_line->unit_price_inc_tax) : ($product_line['unit_price_inc_tax'] ?? $sell_line->unit_price_inc_tax);
+            $item_tax = $uf_number
+                ? $this->num_uf($product_line['item_tax'] ?? $sell_line->item_tax)
+                : ($product_line['item_tax'] ?? $sell_line->item_tax);
+
+            $sell_return_lines_data[] = [
+                'transaction_id' => $sell_return->id, // new transaction "sell_return" type.
+                'product_id' => $sell_line->product_id,
+                'variation_id' => $sell_line->variation_id,
+                'quantity' => $quantity_returned,
+                'unit_price' => $unit_price,
+                'item_tax' => $item_tax,
+                'unit_price_inc_tax' => $unit_price_inc_tax,
+                'tax_id' => $product_line['tax_id'] ?? $sell_line->tax_id,
+                'unit_price_before_discount' => $unit_price,
+                'parent_sell_line_id' => $sell_line->id, // the parent sell line id 
+                'created_at' => \Carbon::now(),
+                'updated_at' => \Carbon::now(),
+            ];
+
+            $is_physical_product = $sell_line->product && $sell_line->product->enable_stock;
+            if ($is_physical_product) {
+                $this->updateQuantitySoldFromSellLine($sell_line, 0, $quantity_returned, false);
+
+                $productUtil->updateProductQuantity(
+                    $sell_return->location_id,
+                    $sell_line->product_id,
+                    $sell_line->variation_id,
+                    $quantity_returned,
+                    0,
+                    null,
+                    false
+                );
             }
         }
 
-        \App\TransactionSellLine::insert($sell_return_lines_data);
-
+        if (! empty($sell_return_lines_data)) {
+            \App\TransactionSellLine::insert($sell_return_lines_data);
+        }
 
         // Ensure final total is saved on the new return transaction
         $sell_return->final_total = $invoice_total['final_total'];
+        if (! $uf_number) {
+            $sell_return->tax_amount = $invoice_total['tax'] ?? 0;
+        }
         $sell_return->save();
 
 

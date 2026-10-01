@@ -2,16 +2,16 @@
   <div class="modal-content">
     <div class="modal-header">
     <button type="button" class="close no-print" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-    <h4 class="modal-title" id="modalTitle"> @lang('lang_v1.sell_return') (<b>@lang('sale.invoice_no'):</b> {{ $sell->return_parent->invoice_no }})
+    <h4 class="modal-title" id="modalTitle"> @lang('lang_v1.sell_return') (<b>@lang('sale.invoice_no'):</b> {{ optional($sell_return)->invoice_no }})
     </h4>
 </div>
 <div class="modal-body">
    <div class="row">
       <div class="col-sm-6 col-xs-6">
         <h4>@lang('lang_v1.sell_return_details'):</h4>
-        <strong>@lang('lang_v1.return_date'):</strong> {{@format_date($sell->return_parent->transaction_date)}}<br>
-        <strong>@lang('contact.customer'):</strong> {{ $sell->contact->name }} <br>
-        <strong>@lang('purchase.business_location'):</strong> {{ $sell->location->name }}
+        <strong>@lang('lang_v1.return_date'):</strong> @if(!empty($sell_return)) {{@format_date($sell_return->transaction_date)}} @endif<br>
+        <strong>@lang('contact.customer'):</strong> {{ optional($sell->contact)->name }} <br>
+        <strong>@lang('purchase.business_location'):</strong> {{ optional($sell->location)->name }}
       </div>
       <div class="col-sm-6 col-xs-6">
         <h4>@lang('lang_v1.sell_details'):</h4>
@@ -37,14 +37,10 @@
             @php
               $total_before_tax = 0;
             @endphp
-            @foreach($sell->sell_lines as $sell_line)
-
-            @if($sell_line->quantity_returned == 0)
-                @continue
-            @endif
+            @foreach($return_lines as $sell_line)
 
             @php
-              $unit_name = $sell_line->product->unit->short_name;
+              $unit_name = optional(optional($sell_line->product)->unit)->short_name;
 
               if(!empty($sell_line->sub_unit)) {
                 $unit_name = $sell_line->sub_unit->short_name;
@@ -54,17 +50,17 @@
             <tr>
                 <td>{{ $loop->iteration }}</td>
                 <td>
-                  {{ $sell_line->product->name }}
-                  @if( $sell_line->product->type == 'variable')
-                    - {{ $sell_line->variations->product_variation->name}}
+                  {{ optional($sell_line->product)->name }}
+                  @if( optional($sell_line->product)->type == 'variable' && !empty($sell_line->variations))
+                    - {{ optional($sell_line->variations->product_variation)->name}}
                     - {{ $sell_line->variations->name}}
                   @endif
                 </td>
                 <td><span class="display_currency" data-currency_symbol="true">{{ $sell_line->unit_price_inc_tax }}</span></td>
-                <td>{{@format_quantity($sell_line->quantity_returned)}} {{$unit_name}}</td>
+                <td>{{@format_quantity($sell_line->quantity)}} {{$unit_name}}</td>
                 <td>
                   @php
-                    $line_total = $sell_line->unit_price_inc_tax * $sell_line->quantity_returned;
+                    $line_total = $sell_line->unit_price_inc_tax * $sell_line->quantity;
                     $total_before_tax += $line_total ;
                   @endphp
                   <span class="display_currency" data-currency_symbol="true">{{$line_total}}</span>
@@ -87,8 +83,8 @@
         <tr>
           <th>@lang('lang_v1.return_discount'): </th>
           <td><b>(-)</b></td>
-          <td class="text-right">@if($sell->return_parent->discount_type == 'percentage')
-              @<strong><small>{{$sell->return_parent->discount_amount}}%</small></strong> -
+          <td class="text-right">@if(!empty($sell_return) && $sell_return->discount_type == 'percentage')
+              @<strong><small>{{$sell_return->discount_amount}}%</small></strong> -
               @endif
           <span class="display_currency pull-right" data-currency_symbol="true">{{ $total_discount }}</span></td>
         </tr>
@@ -109,7 +105,7 @@
         <tr>
           <th>@lang('lang_v1.return_total'):</th>
           <td></td>
-          <td><span class="display_currency pull-right" data-currency_symbol="true" >{{ $sell->return_parent->final_total }}</span></td>
+          <td><span class="display_currency pull-right" data-currency_symbol="true" >{{ optional($sell_return)->final_total }}</span></td>
         </tr>
       </table>
     </div>
@@ -122,7 +118,9 @@
   </div>
 </div>
 <div class="modal-footer">
-    <a href="#" class="print-invoice tw-dw-btn tw-dw-btn-primary tw-text-white" data-href="{{action([\App\Http\Controllers\SellReturnController::class, 'printInvoice'], [$sell->return_parent->id])}}"><i class="fa fa-print" aria-hidden="true"></i> @lang("messages.print")</a>
+    @if(!empty($sell_return))
+    <a href="#" class="print-invoice tw-dw-btn tw-dw-btn-primary tw-text-white" data-href="{{action([\App\Http\Controllers\SellReturnController::class, 'printInvoice'], [$sell_return->id])}}"><i class="fa fa-print" aria-hidden="true"></i> @lang("messages.print")</a>
+    @endif
       <button type="button" class="tw-dw-btn tw-dw-btn-neutral tw-text-white no-print" data-dismiss="modal">@lang( 'messages.close' )</button>
     </div>
   </div>
