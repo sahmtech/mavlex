@@ -527,6 +527,9 @@ class SellReturnController extends Controller
                 $sell_taxes[$sell_return->tax->name] = $sell_return->tax_amount;
             }
         }
+        if (empty($sell_taxes) && !empty($sell_return) && (float) $sell_return->tax_amount > 0) {
+            $sell_taxes[__('sale.tax')] = $sell_return->tax_amount;
+        }
         if (empty($sell_taxes) && !empty($sell_return)) {
             $line_tax_total = 0;
             foreach ($return_lines as $return_line) {

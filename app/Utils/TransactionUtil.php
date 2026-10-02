@@ -6375,27 +6375,61 @@ class TransactionUtil extends Util
     }
 
     /**
+     * Normalize one Connector sell-return line.
+     * Flutter sends item_tax as the line tax total (not per unit).
+     * DB transaction_sell_lines.item_tax is per unit, matching POS.
+     */
+    protected function apiSellReturnLineAmounts(array $product)
+    {
+        $qty = (float) ($product['quantity'] ?? 0);
+        $unit_price = (float) ($product['unit_price'] ?? 0);
+        $inc = (float) ($product['unit_price_inc_tax'] ?? 0);
+        $posted_tax = (float) ($product['item_tax'] ?? 0);
+        $line_discount = (float) ($product['line_discount_amount'] ?? 0);
+
+        $implied_unit_tax = ($inc > $unit_price) ? ($inc - $unit_price) : 0.0;
+        $line_tax = $posted_tax;
+
+        if ($qty > 0 && $posted_tax > 0) {
+            $as_per_unit = abs(($unit_price + $posted_tax) - $inc);
+            $as_line_total = abs(($unit_price + ($posted_tax / $qty)) - $inc);
+            // Prefer the interpretation that reconstructs unit_price_inc_tax.
+            if ($as_per_unit + 0.02 < $as_line_total) {
+                $line_tax = $posted_tax * $qty;
+            }
+        }
+
+        if ($line_tax == 0.0 && $implied_unit_tax > 0 && $qty > 0) {
+            $line_tax = $implied_unit_tax * $qty;
+        }
+
+        $unit_tax = $qty > 0 ? ($line_tax / $qty) : 0.0;
+
+        return [
+            'quantity' => $qty,
+            'unit_price' => $unit_price,
+            'unit_price_inc_tax' => $inc,
+            'item_tax_unit' => $unit_tax,
+            'item_tax_line' => $line_tax,
+            'line_discount' => $line_discount,
+        ];
+    }
+
+    /**
      * Credit-note totals from posted sell-return lines (Connector/API).
-     * Uses unit_price_inc_tax and item_tax as sent — no tax-group recalculation.
+     * final_total = Σ(unit_price_inc_tax × qty). Tax is the posted line total, not × qty again.
      */
     protected function sellReturnTotalsFromPostedLines(array $products, array $discount)
     {
         $output = ['total_before_tax' => 0, 'tax' => 0, 'discount' => 0, 'final_total' => 0];
 
         foreach ($products as $product) {
-            $qty = (float) ($product['quantity'] ?? 0);
-            $unit_price = (float) ($product['unit_price'] ?? 0);
-            $inc = (float) ($product['unit_price_inc_tax'] ?? 0);
-            $item_tax = (float) ($product['item_tax'] ?? 0);
-            if ($item_tax == 0.0 && $inc > $unit_price) {
-                $item_tax = $inc - $unit_price;
-            }
-            $line_discount = (float) ($product['line_discount_amount'] ?? 0);
+            $line = $this->apiSellReturnLineAmounts($product);
 
-            $output['total_before_tax'] += $qty * $unit_price;
-            $output['tax'] += $qty * $item_tax;
-            $output['discount'] += $qty * $line_discount;
-            $output['final_total'] += $qty * $inc;
+            $output['total_before_tax'] += $line['quantity'] * $line['unit_price'];
+            $output['tax'] += $line['item_tax_line'];
+            $output['discount'] += $line['quantity'] * $line['line_discount'];
+            $output['final_total'] += $line['quantity'] * $line['unit_price_inc_tax'];
         }
 
         $invoice_discount = (float) ($discount['discount_amount'] ?? 0);
@@ -6517,11 +6551,16 @@ class TransactionUtil extends Util
                 continue;
             }
 
-            $unit_price = $uf_number ? $this->num_uf($product_line['unit_price'] ?? $sell_line->unit_price) : ($product_line['unit_price'] ?? $sell_line->unit_price);
-            $unit_price_inc_tax = $uf_number ? $this->num_uf($product_line['unit_price_inc_tax'] ?? $sell_line->unit_price_inc_tax) : ($product_line['unit_price_inc_tax'] ?? $sell_line->unit_price_inc_tax);
-            $item_tax = $uf_number
-                ? $this->num_uf($product_line['item_tax'] ?? $sell_line->item_tax)
-                : ($product_line['item_tax'] ?? $sell_line->item_tax);
+            if ($uf_number) {
+                $unit_price = $this->num_uf($product_line['unit_price'] ?? $sell_line->unit_price);
+                $unit_price_inc_tax = $this->num_uf($product_line['unit_price_inc_tax'] ?? $sell_line->unit_price_inc_tax);
+                $item_tax = $this->num_uf($product_line['item_tax'] ?? $sell_line->item_tax);
+            } else {
+                $api_line = $this->apiSellReturnLineAmounts($product_line);
+                $unit_price = $api_line['unit_price'] !== 0.0 ? $api_line['unit_price'] : $sell_line->unit_price;
+                $unit_price_inc_tax = $api_line['unit_price_inc_tax'] !== 0.0 ? $api_line['unit_price_inc_tax'] : $sell_line->unit_price_inc_tax;
+                $item_tax = $api_line['item_tax_unit'] !== 0.0 ? $api_line['item_tax_unit'] : $sell_line->item_tax;
+            }
 
             $sell_return_lines_data[] = [
                 'transaction_id' => $sell_return->id, // new transaction "sell_return" type.
