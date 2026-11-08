@@ -176,7 +176,7 @@ class ZatcaInvoiceController extends Controller
                 ->setPostalNumber($setting['postal_number'])
                 ->setCountryName($setting['country_name'])
                 ->setVatNumber($setting['vat_number'])
-                ->setVatName($setting['vat_name']);
+                ->setVatName(!empty($setting['organization_name']) ? $setting['organization_name'] : ($setting['vat_name'] ?? ''));
 
                 $actualDeliveryDate = date('Y-m-d', strtotime($sell->delivery_date ?? $sell->transaction_date));
 
@@ -599,7 +599,7 @@ class ZatcaInvoiceController extends Controller
                 ->setPostalNumber($setting['postal_number'])
                 ->setCountryName($setting['country_name'])
                 ->setVatNumber($setting['vat_number'])
-                ->setVatName($setting['vat_name']);
+                ->setVatName(!empty($setting['organization_name']) ? $setting['organization_name'] : ($setting['vat_name'] ?? ''));
 
             // Initialize delivery information.
             $delivery = (new Delivery()) // invoice expected delievery date
@@ -968,7 +968,7 @@ class ZatcaInvoiceController extends Controller
                 ->setPostalNumber($setting['postal_number'])
                 ->setCountryName($setting['country_name'])
                 ->setVatNumber($setting['vat_number'])
-                ->setVatName($setting['vat_name']);
+                ->setVatName(!empty($setting['organization_name']) ? $setting['organization_name'] : ($setting['vat_name'] ?? ''));
 
             // Initialize delivery information.
           if(!empty($credit_note->return_parent_id)){

@@ -160,6 +160,32 @@
                 </div>
             </div>
         </div>
+    </div>
+    <hr>
+    <div class="row">
+        <div class="col-md-12"><h4>@lang('lang_v1.shipping_section') @show_tooltip(__('lang_v1.enable_shipping_in_sales_help')):</h4></div>
+        <div class="col-sm-4">
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                    {!! Form::checkbox('pos_settings[enable_shipping_in_sales]', 1, !empty($pos_settings['enable_shipping_in_sales']) , [ 'class' => 'input-icheck', 'id' => 'enable_shipping_in_sales']); !!} {{ __( 'lang_v1.enable_shipping_in_sales' ) }}
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+    <hr>
+    <div class="row">
+        <div class="col-md-12"><h4>@lang('lang_v1.attach_document_section') @show_tooltip(__('lang_v1.enable_document_in_sales_help')):</h4></div>
+        <div class="col-sm-4">
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                    {!! Form::checkbox('pos_settings[enable_document_in_sales]', 1, !empty($pos_settings['enable_document_in_sales']) , [ 'class' => 'input-icheck', 'id' => 'enable_document_in_sales']); !!} {{ __( 'lang_v1.enable_document_in_sales' ) }}
+                    </label>
+                </div>
+            </div>
+        </div>
         <!-- <div class="col-md-12">
             <h4>Razorpay: <small>(For INR India)</small></h4>
         </div> -->
@@ -191,5 +217,57 @@
                 {!! Form::text('pos_settings[stripe_secret_key]', $pos_settings['stripe_secret_key'] ?? '', ['class' => 'form-control', 'id' => 'stripe_secret_key']); !!}
             </div>
         </div> -->
+    </div>
+    <hr>
+    <div class="row">
+        <div class="col-md-12"><h4>@lang('invoice.invoice_scheme') @show_tooltip(__('lang_v1.enable_invoice_scheme_in_sales_help')):</h4></div>
+        <div class="col-sm-4">
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                    {!! Form::checkbox('pos_settings[enable_invoice_scheme_in_sales]', 1, !empty($pos_settings['enable_invoice_scheme_in_sales']) , [ 'class' => 'input-icheck', 'id' => 'enable_invoice_scheme_in_sales']); !!} {{ __( 'lang_v1.enable_invoice_scheme_in_sales' ) }}
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+    <hr>
+    <div class="row">
+        <div class="col-md-12"><h4>@lang('contact.pay_term') @show_tooltip(__('lang_v1.enable_pay_term_in_sales_help')):</h4></div>
+        <div class="col-sm-4">
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                    {!! Form::checkbox('pos_settings[enable_pay_term_in_sales]', 1, !empty($pos_settings['enable_pay_term_in_sales']) , [ 'class' => 'input-icheck', 'id' => 'enable_pay_term_in_sales']); !!} {{ __( 'lang_v1.enable_pay_term_in_sales' ) }}
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+    <hr>
+    <div class="row">
+        <div class="col-md-12"><h4>@lang('lang_v1.line_discount_type') @show_tooltip(__('lang_v1.enable_line_discount_type_in_sales_help')):</h4></div>
+        <div class="col-sm-8">
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                    {!! Form::checkbox('pos_settings[enable_line_discount_type_in_sales]', 1, !empty($pos_settings['enable_line_discount_type_in_sales']) , [ 'class' => 'input-icheck', 'id' => 'enable_line_discount_type_in_sales']); !!} {{ __( 'lang_v1.enable_line_discount_type_in_sales' ) }}
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+    <hr>
+    <div class="row">
+        <div class="col-md-12"><h4>@lang('lang_v1.additional_expenses_section') @show_tooltip(__('lang_v1.enable_additional_expense_in_sales_help')):</h4></div>
+        <div class="col-sm-8">
+            <div class="form-group">
+                <div class="checkbox">
+                    <label>
+                    {!! Form::checkbox('pos_settings[enable_additional_expense_in_sales]', 1, !empty($pos_settings['enable_additional_expense_in_sales']) , [ 'class' => 'input-icheck', 'id' => 'enable_additional_expense_in_sales']); !!} {{ __( 'lang_v1.enable_additional_expense_in_sales' ) }}
+                    </label>
+                </div>
+            </div>
+        </div>
     </div>
 </div>

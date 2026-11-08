@@ -262,13 +262,128 @@
       <div class="col-md-6 col-sm-12 col-xs-12 @if($sell->type == 'sales_order') col-md-offset-6 @endif">
         <div class="table-responsive">
           <table class="table bg-gray">
+            @php
+              $round_sell_money = function ($value) {
+                  if (!is_numeric($value)) {
+                      return 0.0;
+                  }
+                  $value = (float) $value;
+                  $sign = $value < 0 ? -1 : 1;
+                  $stabilized = round(abs($value) * 100000000) / 100000000;
+                  $cents = (int) round($stabilized * 100);
+                  return ($sign * $cents) / 100;
+              };
+
+              $gross_before_discount = 0;
+              $line_items_discount = 0;
+              $lines_tax = 0;
+              foreach ($sell->sell_lines as $sell_line) {
+                  $qty = (float) $sell_line->quantity;
+                  $gross_before_discount += $round_sell_money((float) $sell_line->unit_price_before_discount * $qty);
+                  $line_items_discount += $sell_line->get_discount_amount() * $qty;
+                  $lines_tax += $round_sell_money((float) $sell_line->item_tax * $qty);
+              }
+              $gross_before_discount = $round_sell_money($gross_before_discount);
+              $line_items_discount = $round_sell_money($line_items_discount);
+              $lines_tax = $round_sell_money($lines_tax);
+              $after_line_discount = $round_sell_money($gross_before_discount - $line_items_discount);
+              $discount_includes_tax = ! empty($sell->discount_includes_tax);
+              $invoice_discount_money = (float) $sell->discount_amount;
+              $inclusive_before = $round_sell_money($after_line_discount + $lines_tax);
+              if ($sell->discount_type == 'percentage') {
+                  $discount_base = $discount_includes_tax ? $inclusive_before : $after_line_discount;
+                  $invoice_discount_money = $discount_base * ($invoice_discount_money / 100);
+              }
+              $invoice_discount_money = $round_sell_money($invoice_discount_money);
+              if ($discount_includes_tax) {
+                  $inclusive_after = $round_sell_money($inclusive_before - $invoice_discount_money);
+                  if ($inclusive_after < 0) {
+                      $inclusive_after = 0;
+                  }
+                  $tax_ratio = $inclusive_before > 0 ? ($inclusive_after / $inclusive_before) : 0;
+                  $after_discount = $round_sell_money($after_line_discount * $tax_ratio);
+                  $lines_tax = $round_sell_money($inclusive_after - $after_discount);
+              } else {
+                  $after_discount = $round_sell_money($after_line_discount - $invoice_discount_money);
+                  if ($after_discount < 0) {
+                      $after_discount = 0;
+                  }
+                  $tax_ratio = ($invoice_discount_money > 0 && $after_line_discount > 0)
+                      ? ($after_discount / $after_line_discount)
+                      : 1;
+                  if ($tax_ratio != 1) {
+                      $lines_tax = $round_sell_money($lines_tax * $tax_ratio);
+                  }
+              }
+              $view_taxes = [];
+              $line_tax_rates = \App\TaxRate::with('sub_taxes')
+                  ->whereIn('id', $sell->sell_lines->pluck('tax_id')->filter()->unique()->all())
+                  ->get()
+                  ->keyBy('id');
+              foreach ($sell->sell_lines as $sell_line) {
+                  if (empty($sell_line->tax_id) || empty($taxes[$sell_line->tax_id])) {
+                      continue;
+                  }
+                  $qty = (float) $sell_line->quantity;
+                  $tax_rate = $line_tax_rates[$sell_line->tax_id] ?? null;
+                  if ($tax_rate && $tax_rate->is_tax_group && $tax_rate->sub_taxes && $tax_rate->sub_taxes->count() > 0) {
+                      $minimum_tax = $tax_rate->sub_taxes->first(function ($sub) {
+                          return $sub->min_amount !== null && $sub->min_amount !== '';
+                      });
+                      $plain_tax = $tax_rate->sub_taxes->first(function ($sub) {
+                          return $sub->min_amount === null || $sub->min_amount === '';
+                      });
+                      $unit_price = (float) $sell_line->unit_price;
+                      $minimum_portion = 0;
+                      if ($minimum_tax) {
+                          $minimum = (float) $minimum_tax->min_amount;
+                          $rate = (float) $minimum_tax->amount;
+                          if ($minimum > 0 && $unit_price < $minimum) {
+                              $minimum_portion = $minimum;
+                          } else {
+                              $minimum_portion = $unit_price * ($rate / 100);
+                          }
+                      }
+                      if ($plain_tax && ! empty($taxes[$plain_tax->id])) {
+                          $plain_name = $taxes[$plain_tax->id];
+                          $plain_portion = ($unit_price + $minimum_portion) * ((float) $plain_tax->amount / 100);
+                          if (! isset($view_taxes[$plain_name])) {
+                              $view_taxes[$plain_name] = 0;
+                          }
+                          $view_taxes[$plain_name] += $round_sell_money($plain_portion * $qty);
+                      }
+                      if ($minimum_tax) {
+                          $compound_name = ! empty($taxes[$minimum_tax->id]) ? $taxes[$minimum_tax->id] : $minimum_tax->name;
+                          if (! isset($view_taxes[$compound_name])) {
+                              $view_taxes[$compound_name] = 0;
+                          }
+                          $view_taxes[$compound_name] += $round_sell_money($minimum_portion * $qty);
+                      }
+                      continue;
+                  }
+                  $tax_name = $taxes[$sell_line->tax_id];
+                  $tax_line_amount = $round_sell_money((float) $sell_line->item_tax * $qty);
+                  if (! isset($view_taxes[$tax_name])) {
+                      $view_taxes[$tax_name] = 0;
+                  }
+                  $view_taxes[$tax_name] += $tax_line_amount;
+              }
+              foreach ($view_taxes as $tax_name => $tax_line_amount) {
+                  $view_taxes[$tax_name] = $round_sell_money($tax_line_amount * $tax_ratio);
+              }
+            @endphp
             <tr>
-              <th>{{ __('sale.total') }}: </th>
+              <th>{{ __('sale.view_total_excl_tax') }}: </th>
               <td></td>
-              <td><span class="display_currency pull-right" data-currency_symbol="true">{{ $sell->total_before_tax }}</span></td>
+              <td><span class="display_currency pull-right" data-currency_symbol="true">{{ $gross_before_discount }}</span></td>
             </tr>
             <tr>
-              <th>{{ __('sale.discount') }}:</th>
+              <th>{{ __('sale.view_line_items_discount') }}:</th>
+              <td><b>(-)</b></td>
+              <td><span class="display_currency pull-right" data-currency_symbol="true">{{ $line_items_discount }}</span></td>
+            </tr>
+            <tr>
+              <th>{{ __('sale.view_invoice_discount') }}:</th>
               <td><b>(-)</b></td>
               <td><div class="pull-right"><span class="display_currency" @if( $sell->discount_type == 'fixed') data-currency_symbol="true" @endif>{{ $sell->discount_amount }}</span> @if( $sell->discount_type == 'percentage') {{ '%'}} @endif</span></div></td>
             </tr>
@@ -286,19 +401,19 @@
                 <td> <span class="display_currency pull-right" data-currency_symbol="true">{{ $sell->rp_redeemed_amount }}</span></td>
               </tr>
             @endif
+            @forelse($view_taxes as $tax_name => $tax_line_amount)
             <tr>
-              <th>{{ __('sale.order_tax') }}:</th>
+              <th>{{ $tax_name }}:</th>
               <td><b>(+)</b></td>
-              <td class="text-right">
-                @if(!empty($order_taxes))
-                  @foreach($order_taxes as $k => $v)
-                    <strong><small>{{$k}}</small></strong> - <span class="display_currency pull-right" data-currency_symbol="true">{{ $v }}</span><br>
-                  @endforeach
-                @else
-                0.00
-                @endif
-              </td>
+              <td><span class="display_currency pull-right" data-currency_symbol="true">{{ $tax_line_amount }}</span></td>
             </tr>
+            @empty
+            <tr>
+              <th>{{ __('sale.view_tax') }}:</th>
+              <td><b>(+)</b></td>
+              <td><span class="display_currency pull-right" data-currency_symbol="true">{{ $lines_tax }}</span></td>
+            </tr>
+            @endforelse
             @if(!empty($line_taxes))
             <tr>
               <th>{{ __('lang_v1.line_taxes') }}:</th>
@@ -314,11 +429,13 @@
               </td>
             </tr>
             @endif
+            @if(!empty($pos_settings['enable_shipping_in_sales']))
             <tr>
               <th>{{ __('sale.shipping') }}: @if($sell->shipping_details)({{$sell->shipping_details}}) @endif</th>
               <td><b>(+)</b></td>
               <td><span class="display_currency pull-right" data-currency_symbol="true">{{ $sell->shipping_charges }}</span></td>
             </tr>
+            @endif
 
             @if( !empty( $sell->additional_expense_value_1 )  && !empty( $sell->additional_expense_key_1 ))
               <tr>
@@ -348,11 +465,13 @@
                 <td><span class="display_currency pull-right" >{{ $sell->additional_expense_value_4 }}</span></td>
               </tr>
             @endif
+            @if(!empty($pos_settings['amount_rounding_method']) && $pos_settings['amount_rounding_method'] > 0)
             <tr>
               <th>{{ __('lang_v1.round_off') }}: </th>
               <td></td>
               <td><span class="display_currency pull-right" data-currency_symbol="true">{{ $sell->round_off_amount }}</span></td>
             </tr>
+            @endif
             <tr>
               <th>{{ __('sale.total_payable') }}: </th>
               <td></td>

@@ -42,7 +42,7 @@ class TaxRateController extends Controller
 
             $tax_rates = TaxRate::where('business_id', $business_id)
                         ->where('is_tax_group', '0')
-                      ->select(['name', 'amount', 'min_amount', 'id', 'for_tax_group']);
+                      ->select(['id', 'name', 'amount', 'min_amount', 'for_tax_group']);
 
             return Datatables::of($tax_rates)
                 ->addColumn(
@@ -60,8 +60,7 @@ class TaxRateController extends Controller
                ->editColumn('min_amount', '{{@num_format($min_amount)}}')
                
                 ->removeColumn('for_tax_group')
-                ->removeColumn('id')
-                ->rawColumns([0, 2,3])
+                ->rawColumns([1, 4])
                 ->make(false);
         }
 

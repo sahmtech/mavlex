@@ -47,6 +47,7 @@ class TransactionUtil extends Util
         $invoice_no = ! empty($input['invoice_no']) ? $input['invoice_no'] : $this->getInvoiceNumber($business_id, $input['status'], $input['location_id'], $invoice_scheme_id, $sale_type);
 
         $final_total = $uf_data ? $this->num_uf($input['final_total']) : $input['final_total'];
+        $header_taxes = $this->sellHeaderTaxTotals($input['products'] ?? [], $uf_data);
 
         $pay_term_number = isset($input['pay_term_number']) ? $input['pay_term_number'] : null;
         $pay_term_type = isset($input['pay_term_type']) ? $input['pay_term_type'] : null;
@@ -71,11 +72,13 @@ class TransactionUtil extends Util
             'source' => ! empty($input['source']) ? $input['source'] : null,
             'total_before_tax' => $invoice_total['total_before_tax'],
             'transaction_date' => $input['transaction_date'],
-            'tax_id' => ! empty($input['tax_rate_id']) ? $input['tax_rate_id'] : null,
             'discount_type' => ! empty($input['discount_type']) ? $input['discount_type'] : null,
             'discount_amount' => $uf_data ? $this->num_uf($input['discount_amount']) : $input['discount_amount'],
-            'tax_id' => isset($invoice_total['tax_12_id']) ? $invoice_total['tax_12_id'] : (!empty($input['tax_rate_id']) ? $input['tax_rate_id'] : null),
-            'tax_amount' => $invoice_total['tax'],
+            'discount_includes_tax' => ! empty($input['discount_includes_tax']) ? 1 : 0,
+            'tax_id' => $header_taxes['tax_id'],
+            'tax_amount' => $header_taxes['tax_amount'],
+            'tax2_id' => $header_taxes['tax2_id'],
+            'tax2_amount' => $header_taxes['tax2_amount'],
             'final_total' => $final_total,
             'additional_notes' => ! empty($input['sale_note']) ? $input['sale_note'] : null,
             'staff_note' => ! empty($input['staff_note']) ? $input['staff_note'] : null,
@@ -152,6 +155,113 @@ class TransactionUtil extends Util
     }
 
     /**
+     * Split a sale header into the plain tax and the compound tax.
+     * Plain tax is a single rate with no minimum. Compound tax amount is
+     * only the minimum, or the percentage when the price reaches that minimum.
+     *
+     * @param  array  $products
+     * @param  bool  $uf_data
+     * @return array
+     */
+    public function sellHeaderTaxTotals($products, $uf_data = true)
+    {
+        $simple_tax_id = null;
+        $simple_tax_amount = 0;
+        $compound_tax_id = null;
+        $compound_tax_amount = 0;
+
+        if (empty($products)) {
+            return [
+                'tax_id' => null,
+                'tax_amount' => 0,
+                'tax2_id' => null,
+                'tax2_amount' => 0,
+            ];
+        }
+
+        $tax_ids = [];
+        foreach ($products as $product) {
+            if (! empty($product['tax_id'])) {
+                $tax_ids[] = $product['tax_id'];
+            }
+        }
+        $taxes = TaxRate::with('sub_taxes')->whereIn('id', $tax_ids)->get()->keyBy('id');
+
+        foreach ($products as $product) {
+            if (empty($product['tax_id']) || empty($taxes[$product['tax_id']])) {
+                continue;
+            }
+
+            $tax = $taxes[$product['tax_id']];
+            $quantity = $uf_data ? $this->num_uf($product['quantity'] ?? 0) : ($product['quantity'] ?? 0);
+            $unit_price = $uf_data ? $this->num_uf($product['unit_price'] ?? 0) : ($product['unit_price'] ?? 0);
+            $discount_amount = 0;
+            if (! empty($product['line_discount_amount'])) {
+                $discount_amount = $uf_data
+                    ? $this->num_uf($product['line_discount_amount'])
+                    : $product['line_discount_amount'];
+            }
+            if (($product['line_discount_type'] ?? '') === 'fixed') {
+                $unit_price -= $discount_amount;
+            } elseif (($product['line_discount_type'] ?? '') === 'percentage') {
+                $unit_price = ((100 - $discount_amount) * $unit_price) / 100;
+            }
+            if ($unit_price < 0) {
+                $unit_price = 0;
+            }
+
+            $sub_taxes = $tax->sub_taxes;
+            if ($tax->is_tax_group && $sub_taxes && $sub_taxes->count() > 0) {
+                $minimum_tax = $sub_taxes->first(function ($sub) {
+                    return $sub->min_amount !== null && $sub->min_amount !== '';
+                });
+                $plain_tax = $sub_taxes->first(function ($sub) {
+                    return $sub->min_amount === null || $sub->min_amount === '';
+                });
+
+                $minimum_portion = 0;
+                if ($minimum_tax) {
+                    if ($compound_tax_id === null) {
+                        $compound_tax_id = $minimum_tax->id;
+                    }
+                    $minimum = (float) $minimum_tax->min_amount;
+                    $rate = (float) $minimum_tax->amount;
+                    if ($minimum > 0 && $unit_price < $minimum) {
+                        $minimum_portion = $minimum;
+                    } else {
+                        $minimum_portion = $unit_price * ($rate / 100);
+                    }
+                    $compound_tax_amount += $quantity * $minimum_portion;
+                }
+
+                if ($plain_tax) {
+                    if ($simple_tax_id === null) {
+                        $simple_tax_id = $plain_tax->id;
+                    }
+                    $plain_rate = (float) $plain_tax->amount;
+                    $price_after_tax2 = $unit_price + $minimum_portion;
+                    $plain_portion = $price_after_tax2 * ($plain_rate / 100);
+                    $simple_tax_amount += $quantity * $plain_portion;
+                }
+                continue;
+            }
+
+            if ($simple_tax_id === null) {
+                $simple_tax_id = $tax->id;
+            }
+            $item_tax = $uf_data ? $this->num_uf($product['item_tax'] ?? 0) : ($product['item_tax'] ?? 0);
+            $simple_tax_amount += $quantity * $item_tax;
+        }
+
+        return [
+            'tax_id' => $simple_tax_id,
+            'tax_amount' => $simple_tax_amount,
+            'tax2_id' => $compound_tax_id,
+            'tax2_amount' => $compound_tax_amount,
+        ];
+    }
+
+    /**
      * Add Sell transaction
      *
      * @param  mixed  $transaction_id
@@ -178,6 +288,7 @@ class TransactionUtil extends Util
             $invoice_no = $this->getInvoiceNumber($business_id, $input['status'], $transaction->location_id, $invoice_scheme_id);
         }
         $final_total = $uf_data ? $this->num_uf($input['final_total']) : $input['final_total'];
+        $header_taxes = $this->sellHeaderTaxTotals($input['products'] ?? [], $uf_data);
 
         $pay_term_number = isset($input['pay_term_number']) ? $input['pay_term_number'] : null;
         $pay_term_type = isset($input['pay_term_type']) ? $input['pay_term_type'] : null;
@@ -195,10 +306,13 @@ class TransactionUtil extends Util
             'contact_id' => $input['contact_id'],
             'customer_group_id' => $input['customer_group_id'],
             'total_before_tax' => $invoice_total['total_before_tax'],
-            'tax_id' => $input['tax_rate_id'],
+            'tax_id' => $header_taxes['tax_id'],
+            'tax_amount' => $header_taxes['tax_amount'],
+            'tax2_id' => $header_taxes['tax2_id'],
+            'tax2_amount' => $header_taxes['tax2_amount'],
             'discount_type' => $input['discount_type'],
             'discount_amount' => $uf_data ? $this->num_uf($input['discount_amount']) : $input['discount_amount'],
-            'tax_amount' => $invoice_total['tax'],
+            'discount_includes_tax' => ! empty($input['discount_includes_tax']) ? 1 : 0,
             'final_total' => $final_total,
             'document' => isset($input['document']) ? $input['document'] : $transaction->document,
             'source' => isset($input['source']) ? $input['source'] : $transaction->source,
@@ -4320,7 +4434,9 @@ class TransactionUtil extends Util
 
         $credit_limit = Contact::find($input['contact_id'])->credit_limit;
 
-        if ($credit_limit == null) {
+        // Blank and zero mean no credit limit. A stored decimal zero is the
+        // string "0.0000", which is not equal to null, so compare numerically.
+        if ($credit_limit === null || $credit_limit === '' || (float) $credit_limit <= 0) {
             return false;
         }
 
@@ -6457,6 +6573,11 @@ class TransactionUtil extends Util
             $quantity_returned = $uf_number ? $this->num_uf($product_line['quantity']) : $product_line['quantity'];
 
             if ($sell_line) {
+                $quantity_before = (float) $sell_line->getRawOriginal('quantity_returned');
+                $new_quantity_returned = $quantity_before + $quantity_returned;
+
+                $sell_line->quantity_returned = $new_quantity_returned;
+                $sell_line->save();
 
                 $sell_return_lines_data[] = [
                     'transaction_id' => $sell_return->id, // new transaction "sell_return" type.
@@ -6475,7 +6596,7 @@ class TransactionUtil extends Util
 
                 $is_physical_product = $sell_line->product->enable_stock;
                 if ($is_physical_product) {
-                    $this->updateQuantitySoldFromSellLine($sell_line, 0, $quantity_returned, false);
+                    $this->updateQuantitySoldFromSellLine($sell_line, $new_quantity_returned, $quantity_before, false);
 
                     $productUtil->updateProductQuantity(
                         $sell_return->location_id,

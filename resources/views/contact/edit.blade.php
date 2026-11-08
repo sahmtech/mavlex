@@ -276,7 +276,7 @@
                   <span class="input-group-addon">
                       <i class="fas fa-money-bill-alt"></i>
                   </span>
-                  {!! Form::text('credit_limit', $contact->credit_limit != null ? @num_format($contact->credit_limit) : null, ['class' => 'form-control input_number']); !!}
+                  {!! Form::text('credit_limit', ($contact->credit_limit !== null && (float) $contact->credit_limit > 0) ? @num_format($contact->credit_limit) : null, ['class' => 'form-control input_number']); !!}
               </div>
               <p class="help-block">@lang('lang_v1.credit_limit_help')</p>
           </div>

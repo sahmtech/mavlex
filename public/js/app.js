@@ -167,7 +167,7 @@ $(document).ready(function() {
         ajax: '/tax-rates',
         columnDefs: [
             {
-                targets: 2,
+                targets: 4,
                 orderable: false,
                 searchable: false,
             },
@@ -1012,12 +1012,13 @@ $(document).ready(function() {
         ajax: '/group-taxes',
         columnDefs: [
             {
-                targets: [2, 3],
+                targets: [3, 4],
                 orderable: false,
                 searchable: false,
             },
         ],
         columns: [
+            { data: 'id', name: 'id' },
             { data: 'name', name: 'name' },
             { data: 'amount', name: 'amount' },
             { data: 'sub_taxes', name: 'sub_taxes' },

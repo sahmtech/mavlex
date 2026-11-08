@@ -111,7 +111,11 @@ $(document).ready(function () {
     );
 
     jQuery.validator.addMethod('abs_digit', function (value, element) {
-        return this.optional(element) || Number.isInteger(Math.abs(__number_uf(value)));
+        if (this.optional(element)) {
+            return true;
+        }
+        var number = Math.abs(__number_uf(value));
+        return isFinite(number) && Math.abs(number - Math.round(number)) < 0.0000001;
     });
 
     //Set global currency to be used in the application

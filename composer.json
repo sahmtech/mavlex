@@ -104,6 +104,9 @@
         "allow-plugins": {
             "ocramius/package-versions": true,
             "php-http/discovery": true
+        },
+        "audit": {
+            "block-insecure": true
         }
     },
     "minimum-stability": "dev",

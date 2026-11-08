@@ -35,6 +35,7 @@
                 <table class="table table-bordered table-striped" id="tax_rates_table">
                     <thead>
                         <tr>
+                            <th>ID</th>
                             <th>@lang( 'tax_rate.name' )</th>
                             <th>@lang( 'tax_rate.rate' )</th>
                            <th>@lang('tax_rate.min_amount')</th>
@@ -76,6 +77,7 @@
                 <table class="table table-bordered table-striped" id="tax_groups_table">
                     <thead>
                         <tr>
+                            <th>ID</th>
                             <th>@lang( 'tax_rate.name' )</th>
                             <th>@lang( 'tax_rate.rate' )</th>
                             <th>@lang( 'tax_rate.sub_taxes' )</th>

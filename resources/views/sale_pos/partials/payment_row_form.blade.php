@@ -1,4 +1,4 @@
-<div class="row">
+<div class="row @if(!empty($sell_create_fields)) sell-pay-row @endif">
 	<input type="hidden" class="payment_row_index" value="{{ $row_index}}">
 	@php
 		$col_class = 'col-md-6';
@@ -7,7 +7,7 @@
 		}
 		$readonly = $payment_line['method'] == 'advance' ? true : false;
 	@endphp
-	<div class="{{$col_class}}">
+	<div class="{{$col_class}} @if(!empty($sell_create_fields)) sell-pay-amount @endif">
 		<div class="form-group">
 			{!! Form::label("amount_$row_index" ,__('sale.amount') . ':*') !!}
 			<div class="input-group">
@@ -19,7 +19,7 @@
 		</div>
 	</div>
 	@if(!empty($show_date))
-	<div class="{{$col_class}}">
+	<div class="{{$col_class}} @if(!empty($sell_create_fields)) sell-pay-date @endif">
 		<div class="form-group">
 			{!! Form::label("paid_on_$row_index" , __('lang_v1.paid_on') . ':*') !!}
 			<div class="input-group">
@@ -31,7 +31,7 @@
 		</div>
 	</div>
 	@endif
-	<div class="{{$col_class}}">
+	<div class="{{$col_class}} @if(!empty($sell_create_fields)) sell-pay-method @endif">
 		<div class="form-group">
 			{!! Form::label("method_$row_index" , __('lang_v1.payment_method') . ':*') !!}
 			<div class="input-group">
@@ -120,7 +120,7 @@
             <div class="clearfix"></div>
         @endif
 	@if(!empty($accounts))
-		<div class="{{$col_class}}">
+		<div class="{{$col_class}} @if(!empty($sell_create_fields)) sell-pay-account @endif">
 			<div class="form-group @if($readonly) hide @endif">
 				{!! Form::label("account_$row_index" , __('lang_v1.payment_account') . ':') !!}
 				<div class="input-group">
@@ -134,7 +134,7 @@
 	@endif
 	<div class="clearfix"></div>
 		@include('sale_pos.partials.payment_type_details')
-	<div class="col-md-12">
+	<div class="col-md-12 @if(!empty($sell_create_fields)) sell-pay-note @endif">
 		<div class="form-group">
 			{!! Form::label("note_$row_index", __('sale.payment_note') . ':') !!}
 			{!! Form::textarea("payment[$row_index][note]", $payment_line['note'], ['class' => 'form-control', 'rows' => 3, 'id' => "note_$row_index"]); !!}

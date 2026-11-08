@@ -65,18 +65,23 @@ class TaxRate extends Model
 
             $secondSub = $item->sub_taxes->firstWhere('min_amount', null);
 
+            $attr[$item->id]['data-tax-name'] = $item->name;
+
             if ($firstSub) {
                 $attr[$item->id]['data-rate']       = $firstSub->amount;
                 $attr[$item->id]['data-min_amount'] = $firstSub->min_amount;
+                $attr[$item->id]['data-min-name']   = $firstSub->name;
             }
 
             if ($secondSub) {
                 $attr[$item->id]['data-tax2_rate']       = $secondSub->amount;
                 $attr[$item->id]['data-tax2_min_amount'] = $secondSub->min_amount??0;
+                $attr[$item->id]['data-plain-name']      = $secondSub->name;
             }
         } else {
              $attr[$item->id]['data-rate']       = $item->amount;
             $attr[$item->id]['data-min_amount'] = $item->min_amount;
+            $attr[$item->id]['data-tax-name']   = $item->name;
         }
 
         return $attr;

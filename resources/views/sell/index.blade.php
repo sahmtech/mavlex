@@ -213,7 +213,8 @@
                     },
                     {
                         data: 'mobile',
-                        name: 'contacts.mobile'
+                        name: 'contacts.mobile',
+                        visible: false
                     },
                     {
                         data: 'business_location',
@@ -248,12 +249,14 @@
                     },
                     {
                         data: 'shipping_status',
-                        name: 'shipping_status'
+                        name: 'shipping_status',
+                        visible: false
                     },
                     {
                         data: 'total_items',
                         name: 'total_items',
-                        "searchable": false
+                        "searchable": false,
+                        visible: false
                     },
                     {
                         data: 'types_of_service_name',
@@ -299,19 +302,23 @@
                     },
                     {
                         data: 'added_by',
-                        name: 'u.first_name'
+                        name: 'u.first_name',
+                        visible: false
                     },
                     {
                         data: 'additional_notes',
-                        name: 'additional_notes'
+                        name: 'additional_notes',
+                        visible: false
                     },
                     {
                         data: 'staff_note',
-                        name: 'staff_note'
+                        name: 'staff_note',
+                        visible: false
                     },
                     {
                         data: 'shipping_details',
-                        name: 'shipping_details'
+                        name: 'shipping_details',
+                        visible: false
                     },
                     {
                         data: 'table_name',

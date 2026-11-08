@@ -472,7 +472,7 @@ class ContactController extends Controller
             })
             ->editColumn('credit_limit', function ($row) {
                 $html = __('lang_v1.no_limit');
-                if (! is_null($row->credit_limit)) {
+                if (! is_null($row->credit_limit) && (float) $row->credit_limit > 0) {
                     $html = '<span data-orig-value="'.$row->credit_limit.'">'.$this->transactionUtil->num_f($row->credit_limit, true).'</span>';
                 }
 

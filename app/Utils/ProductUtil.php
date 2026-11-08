@@ -2194,37 +2194,27 @@ class ProductUtil extends Util
 
     public function getVariationStockHistory($business_id, $variation_id, $location_id)
     {
-        $stock_history = Transaction::leftjoin(
-            'transaction_sell_lines as sl',
-            'sl.transaction_id',
-            '=',
-            'transactions.id'
-        )
-            ->leftjoin(
-                'purchase_lines as pl',
-                'pl.transaction_id',
-                '=',
-                'transactions.id'
-            )
-            ->leftjoin(
-                'stock_adjustment_lines as al',
-                'al.transaction_id',
-                '=',
-                'transactions.id'
-            )
+        $stock_history = Transaction::leftjoin('transaction_sell_lines as sl', function ($join) use ($variation_id) {
+            $join->on('sl.transaction_id', '=', 'transactions.id')
+                ->where('sl.variation_id', '=', $variation_id);
+        })
+            ->leftjoin('purchase_lines as pl', function ($join) use ($variation_id) {
+                $join->on('pl.transaction_id', '=', 'transactions.id')
+                    ->where('pl.variation_id', '=', $variation_id);
+            })
+            ->leftjoin('stock_adjustment_lines as al', function ($join) use ($variation_id) {
+                $join->on('al.transaction_id', '=', 'transactions.id')
+                    ->where('al.variation_id', '=', $variation_id);
+            })
             ->leftjoin('transactions as return', 'transactions.return_parent_id', '=', 'return.id')
-            ->leftjoin(
-                'purchase_lines as rpl',
-                'rpl.transaction_id',
-                '=',
-                'return.id'
-            )
-            ->leftjoin(
-                'transaction_sell_lines as rsl',
-                'rsl.transaction_id',
-                '=',
-                'return.id'
-            )
+            ->leftjoin('purchase_lines as rpl', function ($join) use ($variation_id) {
+                $join->on('rpl.transaction_id', '=', 'return.id')
+                    ->where('rpl.variation_id', '=', $variation_id);
+            })
+            ->leftjoin('transaction_sell_lines as rsl', function ($join) use ($variation_id) {
+                $join->on('rsl.transaction_id', '=', 'return.id')
+                    ->where('rsl.variation_id', '=', $variation_id);
+            })
             ->leftjoin('contacts as c', 'transactions.contact_id', '=', 'c.id')
             ->where('transactions.location_id', $location_id)
             ->where(function ($q) use ($variation_id) {
@@ -2392,7 +2382,9 @@ class ProductUtil extends Util
                     'stock_in_second_unit' => $this->roundQuantity($stock_in_second_unit),
                 ]);
             } elseif ($stock_line->transaction_type == 'sell_return') {
-                $quantity_change = $stock_line->sell_return;
+                $quantity_change = $stock_line->sell_line_quantity !== null
+                    ? $stock_line->sell_line_quantity
+                    : $stock_line->sell_return;
                 $stock += $quantity_change;
                 $stock_history_array[] = array_merge($temp_array, [
                     'quantity_change' => $quantity_change,
