@@ -6479,6 +6479,38 @@ class TransactionUtil extends Util
         return [$invoice_total, -1 * $diff];
     }
 
+    /**
+     * Put combo components back in stock for the returned parent quantity.
+     */
+    protected function increaseComboStockForSellReturn($sell_line, $location_id, $quantity_returned, $productUtil)
+    {
+        $parent_qty = (float) $sell_line->quantity;
+        if ($parent_qty <= 0 || $quantity_returned <= 0) {
+            return;
+        }
+
+        $combo_children = TransactionSellLine::where('parent_sell_line_id', $sell_line->id)
+            ->where('children_type', 'combo')
+            ->get();
+
+        foreach ($combo_children as $child) {
+            $child_qty = ((float) $child->quantity / $parent_qty) * (float) $quantity_returned;
+            if ($child_qty <= 0) {
+                continue;
+            }
+
+            $productUtil->updateProductQuantity(
+                $location_id,
+                $child->product_id,
+                $child->variation_id,
+                $child_qty,
+                0,
+                null,
+                false
+            );
+        }
+    }
+
     public function addSellReturn($input, $business_id, $user_id, $uf_number = true, $update_sell_lines = false)
     {
         $discount = [
@@ -6492,12 +6524,44 @@ class TransactionUtil extends Util
 
         $input['tax_id'] = $input['tax_id'] ?? null;
 
-        $invoice_total = $productUtil->calculateInvoiceTotal($input['products'], $input['tax_id'], $discount, $uf_number);
-
-        //Get parent sale
+        //Get parent sale before totals so a return coming from the API
+        // can reuse the original line price and tax when those fields are omitted.
         $sell = Transaction::where('business_id', $business_id)
-            ->with(['sell_lines', 'sell_lines.sub_unit'])
+            ->with(['sell_lines', 'sell_lines.product', 'sell_lines.sub_unit'])
             ->findOrFail($input['transaction_id']);
+
+        foreach ($input['products'] as $index => $product_line) {
+            if (empty($product_line['sell_line_id'])) {
+                continue;
+            }
+
+            $parent_line = $sell->sell_lines->firstWhere('id', $product_line['sell_line_id']);
+            if (empty($parent_line)) {
+                continue;
+            }
+
+            if (! isset($product_line['unit_price']) || $product_line['unit_price'] === '') {
+                $input['products'][$index]['unit_price'] = $parent_line->unit_price;
+            }
+            if (! isset($product_line['unit_price_inc_tax']) || $product_line['unit_price_inc_tax'] === '') {
+                $input['products'][$index]['unit_price_inc_tax'] = $parent_line->unit_price_inc_tax;
+            }
+            if (! isset($product_line['item_tax']) || $product_line['item_tax'] === '') {
+                $input['products'][$index]['item_tax'] = $parent_line->item_tax;
+            }
+            if (empty($product_line['tax_id'])) {
+                $input['products'][$index]['tax_id'] = $parent_line->tax_id;
+            }
+        }
+
+        $invoice_total = $productUtil->calculateInvoiceTotal($input['products'], $input['tax_id'], $discount, $uf_number);
+        $header_taxes = $this->sellHeaderTaxTotals($input['products'], $uf_number);
+
+        if (array_key_exists('discount_includes_tax', $input)) {
+            $discount_includes_tax = ! empty($input['discount_includes_tax']) ? 1 : 0;
+        } else {
+            $discount_includes_tax = ! empty($sell->discount_includes_tax) ? 1 : 0;
+        }
 
         $already_returned_amount = Transaction::where('business_id', $business_id)
             ->where('return_parent_id', $sell->id)
@@ -6514,8 +6578,11 @@ class TransactionUtil extends Util
             'invoice_no' => $input['invoice_no'] ?? null,
             'discount_type' => $discount['discount_type'],
             'discount_amount' => $uf_number ? $this->num_uf($discount['discount_amount']) : $discount['discount_amount'],
-            'tax_id' => $input['tax_id'],
-            'tax_amount' => 0,
+            'discount_includes_tax' => $discount_includes_tax,
+            'tax_id' => $header_taxes['tax_id'],
+            'tax_amount' => $header_taxes['tax_amount'],
+            'tax2_id' => $header_taxes['tax2_id'],
+            'tax2_amount' => $header_taxes['tax2_amount'],
             'total_before_tax' => $invoice_total['total_before_tax'],
             'final_total' => $invoice_total['final_total'],
             'round_off_amount' => $round_off_amount,
@@ -6544,6 +6611,7 @@ class TransactionUtil extends Util
         $sell_return_data['status'] = 'final';
         $sell_return_data['created_by'] = $user_id;
         $sell_return_data['return_parent_id'] = $sell->id;
+        $sell_return_data['is_created_from_api'] = ! empty($input['is_created_from_api']) ? 1 : 0;
         $sell_return = Transaction::create($sell_return_data);
 
         $this->activityLog($sell_return, 'added');
@@ -6587,14 +6655,15 @@ class TransactionUtil extends Util
                     'unit_price' => $uf_number ? $this->num_uf($product_line['unit_price']) : $product_line['unit_price'],
                     'item_tax' => $uf_number ? $this->num_uf($product_line['item_tax']) : $product_line['item_tax'],
                     'unit_price_inc_tax' => $uf_number ? $this->num_uf($product_line['unit_price_inc_tax']) : $product_line['unit_price_inc_tax'],
-                    'tax_id' => $product_line['tax_id'],
+                    'tax_id' => ! empty($product_line['tax_id']) ? $product_line['tax_id'] : null,
                     'unit_price_before_discount' => $uf_number ? $this->num_uf($product_line['unit_price']) : $product_line['unit_price'],
                     'parent_sell_line_id' => $sell_line->id, // the parent sell line id 
                     'created_at' => \Carbon::now(),
                     'updated_at' => \Carbon::now(),
                 ];
 
-                $is_physical_product = $sell_line->product->enable_stock;
+                $sell_line->loadMissing('product');
+                $is_physical_product = ! empty($sell_line->product) && $sell_line->product->enable_stock;
                 if ($is_physical_product) {
                     $this->updateQuantitySoldFromSellLine($sell_line, $new_quantity_returned, $quantity_before, false);
 
@@ -6608,6 +6677,8 @@ class TransactionUtil extends Util
                         false
                     );
                 }
+
+                $this->increaseComboStockForSellReturn($sell_line, $sell_return->location_id, $quantity_returned, $productUtil);
             }
         }
 

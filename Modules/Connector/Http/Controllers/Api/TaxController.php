@@ -77,7 +77,8 @@ class TaxController extends ApiController
 
         $business_id = $user->business_id;
 
-        $taxes = TaxRate::where('business_id', $business_id)
+        $taxes = TaxRate::with('sub_taxes')
+                        ->where('business_id', $business_id)
                         ->get();
 
         return CommonResource::collection($taxes);
@@ -112,7 +113,8 @@ class TaxController extends ApiController
         $business_id = $user->business_id;
         $tax_ids = explode(',', $tax_ids);
 
-        $taxes = TaxRate::where('business_id', $business_id)
+        $taxes = TaxRate::with('sub_taxes')
+                        ->where('business_id', $business_id)
                         ->whereIn('id', $tax_ids)
                         ->get();
 

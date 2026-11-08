@@ -951,6 +951,7 @@ class SellController extends ApiController
                     }
 
                     $transaction = $this->transactionUtil->createSellTransaction($user->business_id, $input, $invoice_total, $user->id, false);
+                    $transaction = $this->applyOrderTaxWhenLinesHaveNone($transaction, $input);
                     $input['products'] = $invoice_total['products'];
                     $this->transactionUtil->createOrUpdateSellLines($transaction, $input['products'], $input['location_id'], false, null, [], false, $invoice_total);
                     //Add change return
@@ -1307,6 +1308,7 @@ class SellController extends ApiController
             DB::beginTransaction();
 
             $transaction = $this->transactionUtil->updateSellTransaction($transaction_before, $business_id, $input, $invoice_total, $user->id, false);
+            $transaction = $this->applyOrderTaxWhenLinesHaveNone($transaction, $input);
 
             //Update Sell lines
             $deleted_lines = $this->transactionUtil->createOrUpdateSellLines($transaction, $input['products'], $input['location_id'], true, $status_before, [], false);
@@ -1370,6 +1372,28 @@ class SellController extends ApiController
         }
 
         return $output;
+    }
+
+    /**
+     * Keep a sale-level tax in the plain tax columns when no product line has a tax.
+     */
+    private function applyOrderTaxWhenLinesHaveNone($transaction, $input)
+    {
+        if (! empty($transaction->tax_id) || ! empty($transaction->tax2_id)) {
+            return $transaction;
+        }
+
+        if (empty($input['tax_rate_id']) || empty($input['tax_calculation_amount'])) {
+            return $transaction;
+        }
+
+        $transaction->tax_id = $input['tax_rate_id'];
+        $transaction->tax_amount = $input['tax_calculation_amount'];
+        $transaction->tax2_id = null;
+        $transaction->tax2_amount = 0;
+        $transaction->save();
+
+        return $transaction;
     }
 
     private function __getValue($key, $data, $obj, $default = null, $db_key = null)
@@ -1486,6 +1510,7 @@ class SellController extends ApiController
 
         $sell_lines = [];
         $subtotal = 0;
+        $exclusive_subtotal = 0;
 
         if (! empty($data['products'])) {
             foreach ($data['products'] as $product_data) {
@@ -1515,49 +1540,43 @@ class SellController extends ApiController
                 }
                 $discounted_price = $unit_price - $line_discount;
 
-                //calculate line tax
+                // Line tax is stored later on the transaction as plain tax
+                // (tax_id / tax_amount) and compound tax (tax2_id / tax2_amount).
                 $item_tax = 0;
                 $unit_price_inc_tax = $discounted_price;
                 $tax_id = $this->__getValue('tax_rate_id', $product_data, $sell_line, null, 'tax_id');
                 if (! empty($tax_id)) {
-                    $tax = TaxRate::where('business_id', $business_id)
+                    $tax = TaxRate::with('sub_taxes')
+                        ->where('business_id', $business_id)
                         ->findOrFail($tax_id);
 
-                    if (count($tax->sub_taxes) > 0) {
+                    $sub_taxes = $tax->sub_taxes;
+                    if ($tax->is_tax_group && $sub_taxes && $sub_taxes->count() > 0) {
+                        $minimum_tax = $sub_taxes->first(function ($sub) {
+                            return $sub->min_amount !== null && $sub->min_amount !== '';
+                        });
+                        $plain_tax = $sub_taxes->first(function ($sub) {
+                            return $sub->min_amount === null || $sub->min_amount === '';
+                        });
 
-                        $firstTax = $tax->sub_taxes->first();
-                        $secondTax = $tax->sub_taxes->skip(1)->first();
-
-                        if ($firstTax->min_amount > 0) {
-                            $firstTax = $tax->sub_taxes->first();
-                            $secondTax = $tax->sub_taxes->skip(1)->first();
-                        } else {
-                            $secondTax = $tax->sub_taxes->first();
-                            $firstTax = $tax->sub_taxes->skip(1)->first();
-                        }
-
-                        if ($firstTax) {
-                            $tax_1 = $firstTax->amount;
-                            $tax_1_minimum_limit = $firstTax->min_amount;
-                        }
-
-                        if ($secondTax) {
-                            $tax_2 = $secondTax->amount;
-                        }
-
-                        if (!empty($tax_1)) {
-                            if ($unit_price_inc_tax < $tax_1_minimum_limit) {
-                                $unit_price_inc_tax = $unit_price_inc_tax + $tax_1_minimum_limit;
+                        $minimum_portion = 0;
+                        if ($minimum_tax) {
+                            $minimum = (float) $minimum_tax->min_amount;
+                            $rate = (float) $minimum_tax->amount;
+                            if ($minimum > 0 && $discounted_price < $minimum) {
+                                $minimum_portion = $minimum;
                             } else {
-                                $unit_price_inc_tax += $unit_price_inc_tax * ($tax_1 / 100);
+                                $minimum_portion = $discounted_price * ($rate / 100);
                             }
                         }
 
-                        if (!empty($tax_2)) {
-                            $unit_price_inc_tax += $unit_price_inc_tax * ($tax_2 / 100);
+                        $plain_portion = 0;
+                        if ($plain_tax) {
+                            $plain_portion = ($discounted_price + $minimum_portion) * ((float) $plain_tax->amount / 100);
                         }
 
-                        $item_tax = $tax_1 + $tax_2;
+                        $item_tax = $minimum_portion + $plain_portion;
+                        $unit_price_inc_tax = $discounted_price + $item_tax;
                     } else {
                         $item_tax = $this->transactionUtil->calc_percentage($discounted_price, $tax->amount);
                         $unit_price_inc_tax += $item_tax;
@@ -1620,35 +1639,64 @@ class SellController extends ApiController
 
                 $sell_lines[] = $formated_sell_line;
 
+                $exclusive_subtotal += $discounted_price * $formated_sell_line['quantity'];
                 $subtotal += $line_total;
             }
         }
 
         $formated_data['products'] = $sell_lines;
 
-        //calculate sell discount and tax
+        // Invoice discount is either inside the tax-inclusive total or on the price before tax.
+        $discount_includes_tax = (int) $this->__getValue('discount_includes_tax', $data, $transaction, 1) ? 1 : 0;
         $order_discount_amount = $this->__getValue('discount_amount', $data, $transaction, 0);
         $order_discount_type = $this->__getValue('discount_type', $data, $transaction, 'fixed');
+        $discount_base = $discount_includes_tax ? $subtotal : $exclusive_subtotal;
         $order_discount = $order_discount_amount;
         if ($order_discount_type == 'percentage') {
-            $order_discount = $this->transactionUtil->calc_percentage($subtotal, $order_discount_amount);
+            $order_discount = $this->transactionUtil->calc_percentage($discount_base, $order_discount_amount);
         }
-        $discounted_total = $subtotal - $order_discount;
 
-        //calculate line tax
         $order_tax = 0;
-        $final_total = $discounted_total;
-        $order_tax_id = $this->__getValue('tax_rate_id', $data, $transaction);
-        if (! empty($order_tax_id)) {
-            $tax = TaxRate::where('business_id', $business_id)
-                ->findOrFail($order_tax_id);
+        $order_tax_id = null;
+        $lines_have_tax = false;
+        foreach ($sell_lines as $sell_line) {
+            if (! empty($sell_line['tax_id'])) {
+                $lines_have_tax = true;
+                break;
+            }
+        }
 
-            $order_tax = $this->transactionUtil->calc_percentage($discounted_total, $tax->amount);
-            $final_total += $order_tax;
+        if ($discount_includes_tax) {
+            $final_total = $subtotal - $order_discount;
+        } else {
+            $line_tax_total = $subtotal - $exclusive_subtotal;
+            $after_exclusive = $exclusive_subtotal - $order_discount;
+            if ($after_exclusive < 0) {
+                $after_exclusive = 0;
+            }
+            $tax_ratio = $exclusive_subtotal > 0 ? $after_exclusive / $exclusive_subtotal : 0;
+            $final_total = $after_exclusive + ($line_tax_total * $tax_ratio);
+        }
+        if ($final_total < 0) {
+            $final_total = 0;
+        }
+
+        // Header tax columns are filled from the product lines. A sale-level
+        // tax is applied only when no line has its own tax.
+        if (! $lines_have_tax) {
+            $order_tax_id = $this->__getValue('tax_rate_id', $data, $transaction);
+            if (! empty($order_tax_id)) {
+                $tax = TaxRate::where('business_id', $business_id)
+                    ->findOrFail($order_tax_id);
+
+                $order_tax = $this->transactionUtil->calc_percentage($final_total, $tax->amount);
+                $final_total += $order_tax;
+            }
         }
 
         $formated_data['discount_amount'] = $order_discount_amount;
         $formated_data['discount_type'] = $order_discount_type;
+        $formated_data['discount_includes_tax'] = $discount_includes_tax;
         $formated_data['tax_rate_id'] = $order_tax_id;
         $formated_data['tax_calculation_amount'] = $order_tax;
 
@@ -1770,12 +1818,15 @@ class SellController extends ApiController
      * @bodyParam invoice_no string Invoice number of the return
      * @bodyParam discount_amount float discount amount applicable to the sale Example: 10.0000
      * @bodyParam discount_type string type of the discount amount (fixed, percentage) Example: fixed
+     * @bodyParam discount_includes_tax int 1 when the return discount is taken from the tax-inclusive total, 0 when it is taken from the price before tax. Defaults to the parent sale. Example: 1
 
      * @bodyParam products array required array of the products for the sale
      *
      * @bodyParam products.*.sell_line_id int required sell line id
      * @bodyParam products.*.quantity float required quantity to be returned from the sell line Example: 1
-     * @bodyParam products.*.unit_price_inc_tax float required unit selling price of the returning item Example: 437.5000
+     * @bodyParam products.*.unit_price float unit price before tax. Taken from the original sell line when omitted Example: 100
+     * @bodyParam products.*.unit_price_inc_tax float unit selling price of the returning item. Taken from the original sell line when omitted Example: 115
+     * @bodyParam products.*.tax_rate_id int line tax id. Taken from the original sell line when omitted Example: 1
      *
      * @response {
         "id": 159,
@@ -1883,17 +1934,26 @@ class SellController extends ApiController
         try {
             $input = $request->except('_token');
 
-            if (! empty($input['products'])) {
-                $user = Auth::user();
-
-                $business_id = $user->business_id;
-
-                DB::beginTransaction();
-
-                $output = $this->transactionUtil->addSellReturn($input, $business_id, $user->id);
-
-                DB::commit();
+            if (empty($input['products']) || empty($input['transaction_id'])) {
+                throw new \Exception('transaction_id and products are required');
             }
+
+            $user = Auth::user();
+            $business_id = $user->business_id;
+
+            foreach ($input['products'] as $index => $product) {
+                if (isset($product['tax_rate_id']) && empty($product['tax_id'])) {
+                    $input['products'][$index]['tax_id'] = $product['tax_rate_id'];
+                }
+            }
+
+            $input['is_created_from_api'] = 1;
+
+            DB::beginTransaction();
+
+            $output = $this->transactionUtil->addSellReturn($input, $business_id, $user->id, false);
+
+            DB::commit();
         } catch (ModelNotFoundException $e) {
             DB::rollback();
             $output = $this->modelNotFoundExceptionResult($e);
