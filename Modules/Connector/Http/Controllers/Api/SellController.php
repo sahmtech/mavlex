@@ -940,11 +940,22 @@ class SellController extends ApiController
                         throw new \Exception('No products added');
                     }
 
-                    $discount = [
-                        'discount_type' => $input['discount_type'],
-                        'discount_amount' => $input['discount_amount'],
-                    ];
-                    $invoice_total = $this->productUtil->calculateInvoiceTotal($input['products'], $input['tax_rate_id'], $discount, false);
+                    if (! empty($input['supplied_taxes'])) {
+                        $invoice_total = [
+                            'total_before_tax' => $input['total_before_tax'] ?? 0,
+                            'tax' => $input['tax_total'] ?? 0,
+                            'discount' => $input['discount_amount'] ?? 0,
+                            'final_total' => $input['final_total'],
+                            'products' => $input['products'],
+                        ];
+                    } else {
+                        $discount = [
+                            'discount_type' => $input['discount_type'],
+                            'discount_amount' => $input['discount_amount'],
+                        ];
+                        $invoice_total = $this->productUtil->calculateInvoiceTotal($input['products'], $input['tax_rate_id'], $discount, false);
+                        $input['products'] = $invoice_total['products'];
+                    }
 
                     if ($commsn_agnt_setting == 'logged_in_user') {
                         $input['commission_agent'] = $user->id;
@@ -952,7 +963,6 @@ class SellController extends ApiController
 
                     $transaction = $this->transactionUtil->createSellTransaction($user->business_id, $input, $invoice_total, $user->id, false);
                     $transaction = $this->applyOrderTaxWhenLinesHaveNone($transaction, $input);
-                    $input['products'] = $invoice_total['products'];
                     $this->transactionUtil->createOrUpdateSellLines($transaction, $input['products'], $input['location_id'], false, null, [], false, $invoice_total);
                     //Add change return
                     $change_return = $this->dummyPaymentLine;
@@ -1298,11 +1308,22 @@ class SellController extends ApiController
 
             $sell_data['location_id'] = $transaction_before->location_id;
             $input = $this->__formatSellData($sell_data, $transaction_before);
-            $discount = [
-                'discount_type' => $input['discount_type'],
-                'discount_amount' => $input['discount_amount'],
-            ];
-            $invoice_total = $this->productUtil->calculateInvoiceTotal($input['products'], $input['tax_rate_id'], $discount);
+            if (! empty($input['supplied_taxes'])) {
+                $invoice_total = [
+                    'total_before_tax' => $input['total_before_tax'] ?? 0,
+                    'tax' => $input['tax_total'] ?? 0,
+                    'discount' => $input['discount_amount'] ?? 0,
+                    'final_total' => $input['final_total'],
+                    'products' => $input['products'],
+                ];
+            } else {
+                $discount = [
+                    'discount_type' => $input['discount_type'],
+                    'discount_amount' => $input['discount_amount'],
+                ];
+                $invoice_total = $this->productUtil->calculateInvoiceTotal($input['products'], $input['tax_rate_id'], $discount, false);
+                $input['products'] = $invoice_total['products'];
+            }
 
             //Begin transaction
             DB::beginTransaction();
@@ -1372,6 +1393,134 @@ class SellController extends ApiController
         }
 
         return $output;
+    }
+
+    /**
+     * Use the per-unit tax amounts sent by the cashier without recalculating them.
+     */
+    private function suppliedLineTax(array $product, $business_id, $net_price)
+    {
+        $tax_1_id = $this->nullableTaxId($product['tax_1_id'] ?? null, $business_id);
+        $tax_2_id = $this->nullableTaxId($product['tax_2_id'] ?? null, $business_id);
+        $tax_1 = $this->transactionUtil->plainDecimal($product['tax_1'] ?? 0);
+        $tax_2 = $this->transactionUtil->plainDecimal($product['tax_2'] ?? 0);
+        $item_tax = array_key_exists('item_tax', $product)
+            ? $this->transactionUtil->plainDecimal($product['item_tax'])
+            : $this->transactionUtil->decimalAdd($tax_1, $tax_2);
+
+        return [
+            'tax_1' => $tax_1,
+            'tax_2' => $tax_2,
+            'tax_1_id' => $tax_1_id,
+            'tax_2_id' => $tax_2_id,
+            'item_tax' => $item_tax,
+            'unit_price_inc_tax' => $this->transactionUtil->decimalAdd(
+                $net_price,
+                $this->transactionUtil->decimalAdd($tax_1, $tax_2)
+            ),
+            'tax_id' => $this->nullableTaxId($product['tax_rate_id'] ?? null, $business_id),
+            'tobacco_tax' => $tax_2_id ? $tax_1 : '0',
+        ];
+    }
+
+    /**
+     * Invoice tax totals sent by the cashier. tax_1 is the first API tax.
+     * When both taxes exist, the existing plain column keeps the second tax
+     * and the compound column keeps the first tax.
+     */
+    private function suppliedHeaderTaxes(array $data, array $sell_lines, $business_id)
+    {
+        $sum_1 = '0';
+        $sum_2 = '0';
+        $before_tax = '0';
+        $gross = '0';
+        $first_1 = null;
+        $first_2 = null;
+
+        foreach ($sell_lines as $line) {
+            $quantity = $this->transactionUtil->plainDecimal($line['quantity'] ?? 0);
+            $sum_1 = $this->transactionUtil->decimalAdd($sum_1, $this->transactionUtil->decimalMul($line['tax_1'] ?? 0, $quantity));
+            $sum_2 = $this->transactionUtil->decimalAdd($sum_2, $this->transactionUtil->decimalMul($line['tax_2'] ?? 0, $quantity));
+            $before_tax = $this->transactionUtil->decimalAdd($before_tax, $this->transactionUtil->decimalMul($line['unit_price'] ?? 0, $quantity));
+            $gross = $this->transactionUtil->decimalAdd($gross, $this->transactionUtil->decimalMul($line['unit_price_inc_tax'] ?? 0, $quantity));
+            if ($first_1 === null && ! empty($line['tax_1_id'])) {
+                $first_1 = $line['tax_1_id'];
+            }
+            if ($first_2 === null && ! empty($line['tax_2_id'])) {
+                $first_2 = $line['tax_2_id'];
+            }
+        }
+
+        $tax_1 = array_key_exists('tax_1', $data) ? $this->transactionUtil->plainDecimal($data['tax_1']) : $sum_1;
+        $tax_2 = array_key_exists('tax_2', $data) ? $this->transactionUtil->plainDecimal($data['tax_2']) : $sum_2;
+        $tax_total = array_key_exists('tax_total', $data)
+            ? $this->transactionUtil->plainDecimal($data['tax_total'])
+            : $this->transactionUtil->decimalAdd($tax_1, $tax_2);
+        $tax_1_id = array_key_exists('tax_1_id', $data)
+            ? $this->nullableTaxId($data['tax_1_id'], $business_id)
+            : $first_1;
+        $tax_2_id = array_key_exists('tax_2_id', $data)
+            ? $this->nullableTaxId($data['tax_2_id'], $business_id)
+            : $first_2;
+
+        if (! empty($tax_1_id) && ! empty($tax_2_id)) {
+            $plain_id = $tax_2_id;
+            $plain_amount = $tax_2;
+            $compound_id = $tax_1_id;
+            $compound_amount = $tax_1;
+        } elseif (! empty($tax_1_id)) {
+            $plain_id = $tax_1_id;
+            $plain_amount = $tax_1;
+            $compound_id = null;
+            $compound_amount = '0';
+        } elseif (! empty($tax_2_id)) {
+            $plain_id = $tax_2_id;
+            $plain_amount = $tax_2;
+            $compound_id = null;
+            $compound_amount = '0';
+        } else {
+            $plain_id = null;
+            $plain_amount = '0';
+            $compound_id = null;
+            $compound_amount = '0';
+        }
+
+        $total_before_tax = array_key_exists('total_before_tax', $data) && $data['total_before_tax'] !== ''
+            ? $this->transactionUtil->plainDecimal($data['total_before_tax'])
+            : $before_tax;
+
+        return [
+            'tax_1' => $tax_1,
+            'tax_2' => $tax_2,
+            'tax_total' => $tax_total,
+            'tax_1_id' => $tax_1_id,
+            'tax_2_id' => $tax_2_id,
+            'tax_id' => $plain_id,
+            'tax_amount' => $plain_amount,
+            'tax2_id' => $compound_id,
+            'tax2_amount' => $compound_amount,
+            'gross_total' => $gross,
+            'total_before_tax' => $total_before_tax,
+        ];
+    }
+
+    private function nullableTaxId($value, $business_id)
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0') {
+            return null;
+        }
+
+        $id = (int) $value;
+        if ($id <= 0) {
+            return null;
+        }
+
+        $exists = TaxRate::where('business_id', $business_id)->where('id', $id)->exists();
+        if (! $exists) {
+            throw new \Exception('Invalid tax id '.$id);
+        }
+
+        return $id;
     }
 
     /**
@@ -1511,6 +1660,7 @@ class SellController extends ApiController
         $sell_lines = [];
         $subtotal = 0;
         $exclusive_subtotal = 0;
+        $supplied_taxes = array_key_exists('tax_1', $data) || array_key_exists('tax_total', $data);
 
         if (! empty($data['products'])) {
             foreach ($data['products'] as $product_data) {
@@ -1540,12 +1690,28 @@ class SellController extends ApiController
                 }
                 $discounted_price = $unit_price - $line_discount;
 
-                // Line tax is stored later on the transaction as plain tax
-                // (tax_id / tax_amount) and compound tax (tax2_id / tax2_amount).
                 $item_tax = 0;
                 $unit_price_inc_tax = $discounted_price;
                 $tax_id = $this->__getValue('tax_rate_id', $product_data, $sell_line, null, 'tax_id');
-                if (! empty($tax_id)) {
+                $line_tax_1 = 0;
+                $line_tax_2 = 0;
+                $line_tax_1_id = null;
+                $line_tax_2_id = null;
+                $line_tobacco_tax = 0;
+                $supplied_line = array_key_exists('tax_1', $product_data) || array_key_exists('item_tax', $product_data);
+
+                if ($supplied_line) {
+                    $supplied_taxes = true;
+                    $supplied = $this->suppliedLineTax($product_data, $business_id, $discounted_price);
+                    $item_tax = $supplied['item_tax'];
+                    $unit_price_inc_tax = $supplied['unit_price_inc_tax'];
+                    $tax_id = $supplied['tax_id'];
+                    $line_tax_1 = $supplied['tax_1'];
+                    $line_tax_2 = $supplied['tax_2'];
+                    $line_tax_1_id = $supplied['tax_1_id'];
+                    $line_tax_2_id = $supplied['tax_2_id'];
+                    $line_tobacco_tax = $supplied['tobacco_tax'];
+                } elseif (! empty($tax_id)) {
                     $tax = TaxRate::with('sub_taxes')
                         ->where('business_id', $business_id)
                         ->findOrFail($tax_id);
@@ -1592,6 +1758,12 @@ class SellController extends ApiController
                     'line_discount_amount' => $discount_amount,
                     'tax_id' => $tax_id,
                     'item_tax' => $item_tax,
+                    'tax_1' => $line_tax_1,
+                    'tax_2' => $line_tax_2,
+                    'tax_1_id' => $line_tax_1_id,
+                    'tax_2_id' => $line_tax_2_id,
+                    'tobacco_tax' => $line_tobacco_tax,
+                    'supplied_tax' => $supplied_line,
                     'sell_line_note' => $this->__getValue('note', $product_data, $sell_line, null, 'sell_line_note'),
                     'enable_stock' => $product->enable_stock,
                     'quantity' => $this->__getValue(
@@ -1700,10 +1872,47 @@ class SellController extends ApiController
         $formated_data['tax_rate_id'] = $order_tax_id;
         $formated_data['tax_calculation_amount'] = $order_tax;
 
-        $final_total += $formated_data['shipping_charges'];
+        if ($formated_data['shipping_charges'] === '' || $formated_data['shipping_charges'] === null) {
+            $formated_data['shipping_charges'] = 0;
+        }
 
-        if (! empty($formated_data['packing_charge']) && ! empty($formated_data['types_of_service_id'])) {
-            $final_total += $formated_data['packing_charge'];
+        if (! empty($supplied_taxes)) {
+            $mapped = $this->suppliedHeaderTaxes($data, $sell_lines, $business_id);
+            foreach (['tax_1', 'tax_2', 'tax_total', 'tax_1_id', 'tax_2_id', 'tax_id', 'tax_amount', 'tax2_id', 'tax2_amount', 'total_before_tax'] as $tax_key) {
+                $formated_data[$tax_key] = $mapped[$tax_key];
+            }
+            $formated_data['supplied_taxes'] = 1;
+            $formated_data['discount_includes_tax'] = array_key_exists('discount_includes_tax', $data)
+                ? $discount_includes_tax
+                : 1;
+
+            $gross = array_key_exists('final_total', $data) && $data['final_total'] !== ''
+                ? $this->transactionUtil->plainDecimal($data['final_total'])
+                : $mapped['gross_total'];
+            $discount_money = $this->transactionUtil->plainDecimal($order_discount_amount);
+            if ($order_discount_type === 'percentage') {
+                $discount_money = $this->transactionUtil->decimalMul(
+                    $gross,
+                    $this->transactionUtil->plainDecimal(((float) $order_discount_amount) / 100)
+                );
+            }
+            $payable = $this->transactionUtil->decimalSub($gross, $discount_money);
+            if ((function_exists('bccomp') ? bccomp($payable, '0', 10) : (float) $payable) < 0) {
+                $payable = '0';
+            }
+            $payable = $this->transactionUtil->decimalAdd($payable, $formated_data['shipping_charges']);
+            if (! empty($formated_data['packing_charge']) && ! empty($formated_data['types_of_service_id'])) {
+                $payable = $this->transactionUtil->decimalAdd($payable, $formated_data['packing_charge']);
+            }
+            $final_total = $payable;
+            $formated_data['tax_rate_id'] = null;
+            $formated_data['tax_calculation_amount'] = 0;
+        } else {
+            $final_total += $formated_data['shipping_charges'];
+
+            if (! empty($formated_data['packing_charge']) && ! empty($formated_data['types_of_service_id'])) {
+                $final_total += $formated_data['packing_charge'];
+            }
         }
 
         $formated_data['final_total'] = $final_total;

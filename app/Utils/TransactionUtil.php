@@ -47,7 +47,7 @@ class TransactionUtil extends Util
         $invoice_no = ! empty($input['invoice_no']) ? $input['invoice_no'] : $this->getInvoiceNumber($business_id, $input['status'], $input['location_id'], $invoice_scheme_id, $sale_type);
 
         $final_total = $uf_data ? $this->num_uf($input['final_total']) : $input['final_total'];
-        $header_taxes = $this->sellHeaderTaxTotals($input['products'] ?? [], $uf_data);
+        $header_taxes = $this->resolveHeaderTaxes($input, $uf_data);
 
         $pay_term_number = isset($input['pay_term_number']) ? $input['pay_term_number'] : null;
         $pay_term_type = isset($input['pay_term_type']) ? $input['pay_term_type'] : null;
@@ -79,6 +79,11 @@ class TransactionUtil extends Util
             'tax_amount' => $header_taxes['tax_amount'],
             'tax2_id' => $header_taxes['tax2_id'],
             'tax2_amount' => $header_taxes['tax2_amount'],
+            'tax_1_id' => $header_taxes['tax_1_id'],
+            'tax_1' => $header_taxes['tax_1'],
+            'tax_2_id' => $header_taxes['tax_2_id'],
+            'tax_2' => $header_taxes['tax_2'],
+            'tax_total' => $header_taxes['tax_total'],
             'final_total' => $final_total,
             'additional_notes' => ! empty($input['sale_note']) ? $input['sale_note'] : null,
             'staff_note' => ! empty($input['staff_note']) ? $input['staff_note'] : null,
@@ -253,12 +258,118 @@ class TransactionUtil extends Util
             $simple_tax_amount += $quantity * $item_tax;
         }
 
-        return [
+        return $this->withCashierTaxColumns([
             'tax_id' => $simple_tax_id,
             'tax_amount' => $simple_tax_amount,
             'tax2_id' => $compound_tax_id,
             'tax2_amount' => $compound_tax_amount,
-        ];
+        ]);
+    }
+
+    /**
+     * Header taxes sent by the cashier are stored as-is.
+     * Older requests still use the line calculation.
+     */
+    public function resolveHeaderTaxes(array $input, $uf_data = true)
+    {
+        if (! empty($input['supplied_taxes'])) {
+            return [
+                'tax_id' => $input['tax_id'] ?? null,
+                'tax_amount' => $input['tax_amount'] ?? 0,
+                'tax2_id' => $input['tax2_id'] ?? null,
+                'tax2_amount' => $input['tax2_amount'] ?? 0,
+                'tax_1_id' => $input['tax_1_id'] ?? null,
+                'tax_1' => $this->plainDecimal($input['tax_1'] ?? 0),
+                'tax_2_id' => $input['tax_2_id'] ?? null,
+                'tax_2' => $this->plainDecimal($input['tax_2'] ?? 0),
+                'tax_total' => $this->plainDecimal($input['tax_total'] ?? 0),
+            ];
+        }
+
+        return $this->sellHeaderTaxTotals($input['products'] ?? [], $uf_data);
+    }
+
+    /**
+     * Keep the cashier names beside the existing columns.
+     * tax_1 is the first API tax (the minimum tax when both exist, otherwise the only tax).
+     * tax_2 is the second API tax.
+     */
+    public function withCashierTaxColumns(array $headerTaxes)
+    {
+        $plainId = $headerTaxes['tax_id'] ?? null;
+        $plainAmount = $headerTaxes['tax_amount'] ?? 0;
+        $compoundId = $headerTaxes['tax2_id'] ?? null;
+        $compoundAmount = $headerTaxes['tax2_amount'] ?? 0;
+
+        if (! empty($compoundId)) {
+            $headerTaxes['tax_1_id'] = $compoundId;
+            $headerTaxes['tax_1'] = $this->plainDecimal($compoundAmount);
+            $headerTaxes['tax_2_id'] = $plainId;
+            $headerTaxes['tax_2'] = $this->plainDecimal($plainAmount);
+        } else {
+            $headerTaxes['tax_1_id'] = $plainId;
+            $headerTaxes['tax_1'] = $this->plainDecimal($plainAmount);
+            $headerTaxes['tax_2_id'] = null;
+            $headerTaxes['tax_2'] = $this->plainDecimal(0);
+        }
+
+        $headerTaxes['tax_total'] = $this->decimalAdd($headerTaxes['tax_1'], $headerTaxes['tax_2']);
+
+        return $headerTaxes;
+    }
+
+    public function plainDecimal($value, $scale = 10)
+    {
+        if ($value === null || $value === '') {
+            return '0';
+        }
+
+        if (is_string($value)) {
+            $value = str_replace(',', '', trim($value));
+            if ($value === '' || ! is_numeric($value)) {
+                return '0';
+            }
+
+            return function_exists('bcadd') ? bcadd($value, '0', $scale) : $value;
+        }
+
+        return number_format((float) $value, $scale, '.', '');
+    }
+
+    public function decimalAdd($left, $right, $scale = 10)
+    {
+        $left = $this->plainDecimal($left, $scale);
+        $right = $this->plainDecimal($right, $scale);
+
+        if (function_exists('bcadd')) {
+            return bcadd($left, $right, $scale);
+        }
+
+        return number_format(((float) $left) + ((float) $right), $scale, '.', '');
+    }
+
+    public function decimalSub($left, $right, $scale = 10)
+    {
+        $left = $this->plainDecimal($left, $scale);
+        $right = $this->plainDecimal($right, $scale);
+
+        if (function_exists('bcsub')) {
+            return bcsub($left, $right, $scale);
+        }
+
+        return number_format(((float) $left) - ((float) $right), $scale, '.', '');
+    }
+
+    public function decimalMul($left, $right, $scale = 10)
+    {
+        $left = $this->plainDecimal($left, $scale);
+        $right = $this->plainDecimal($right, $scale);
+
+        if (function_exists('bcmul')) {
+            return bcmul($left, $right, $scale);
+        }
+
+        return number_format(((float) $left) * ((float) $right), $scale, '.', '');
     }
 
     /**
@@ -288,7 +399,7 @@ class TransactionUtil extends Util
             $invoice_no = $this->getInvoiceNumber($business_id, $input['status'], $transaction->location_id, $invoice_scheme_id);
         }
         $final_total = $uf_data ? $this->num_uf($input['final_total']) : $input['final_total'];
-        $header_taxes = $this->sellHeaderTaxTotals($input['products'] ?? [], $uf_data);
+        $header_taxes = $this->resolveHeaderTaxes($input, $uf_data);
 
         $pay_term_number = isset($input['pay_term_number']) ? $input['pay_term_number'] : null;
         $pay_term_type = isset($input['pay_term_type']) ? $input['pay_term_type'] : null;
@@ -310,6 +421,11 @@ class TransactionUtil extends Util
             'tax_amount' => $header_taxes['tax_amount'],
             'tax2_id' => $header_taxes['tax2_id'],
             'tax2_amount' => $header_taxes['tax2_amount'],
+            'tax_1_id' => $header_taxes['tax_1_id'],
+            'tax_1' => $header_taxes['tax_1'],
+            'tax_2_id' => $header_taxes['tax_2_id'],
+            'tax_2' => $header_taxes['tax_2'],
+            'tax_total' => $header_taxes['tax_total'],
             'discount_type' => $input['discount_type'],
             'discount_amount' => $uf_data ? $this->num_uf($input['discount_amount']) : $input['discount_amount'],
             'discount_includes_tax' => ! empty($input['discount_includes_tax']) ? 1 : 0,
@@ -477,7 +593,9 @@ class TransactionUtil extends Util
                 // ? $this->num_uf($product['calculated_item_tax'])
                 // : $product['calculated_item_tax'];
 
-                if (array_key_exists('calculated_item_tax', $product)) {
+                if (! empty($product['supplied_tax'])) {
+                    $raw_item_tax = $product['item_tax'] ?? 0;
+                } elseif (array_key_exists('calculated_item_tax', $product)) {
                     $raw_item_tax = $product['calculated_item_tax'];
                 } else {
                     $raw_item_tax = $product['item_tax'] ?? 0;
@@ -509,6 +627,10 @@ class TransactionUtil extends Util
                     'item_tax' => $uf_item_tax / $multiplier,
                     // 'tobacco_tax' => $product['tobacco_tax'],
                     'tobacco_tax' => !empty($product['tobacco_tax']) ? $product['tobacco_tax'] : 0,
+                    'tax_1' => $product['tax_1'] ?? 0,
+                    'tax_2' => $product['tax_2'] ?? 0,
+                    'tax_1_id' => ! empty($product['tax_1_id']) ? $product['tax_1_id'] : null,
+                    'tax_2_id' => ! empty($product['tax_2_id']) ? $product['tax_2_id'] : null,
 
                     'tax_id' => $product['tax_id'] == 0 ? null : $product['tax_id'],
 
@@ -736,6 +858,11 @@ class TransactionUtil extends Util
             'line_discount_amount' => $line_discount_amount,
             'item_tax' => $uf_data ? $this->num_uf($product['item_tax']) / $multiplier : $product['item_tax'] / $multiplier,
             'tax_id' => $product['tax_id'],
+            'tax_1' => $product['tax_1'] ?? 0,
+            'tax_2' => $product['tax_2'] ?? 0,
+            'tax_1_id' => ! empty($product['tax_1_id']) ? $product['tax_1_id'] : null,
+            'tax_2_id' => ! empty($product['tax_2_id']) ? $product['tax_2_id'] : null,
+            'tobacco_tax' => ! empty($product['tobacco_tax']) ? $product['tobacco_tax'] : 0,
             'unit_price_inc_tax' => $uf_data ? $this->num_uf($product['unit_price_inc_tax']) / $multiplier : $product['unit_price_inc_tax'] / $multiplier,
             'sell_line_note' => ! empty($product['sell_line_note']) ? $product['sell_line_note'] : '',
             'sub_unit_id' => ! empty($product['sub_unit_id']) ? $product['sub_unit_id'] : null,
